@@ -70,7 +70,7 @@ export default function RegisterPage() {
             <p className="mt-1 text-xs text-red-400">{formState.errors.username?.message}</p>
           </div>
           <div>
-            <Input placeholder="owner@aovpro.com" {...register("email")} />
+            <Input placeholder="email@domain.com" {...register("email")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.email?.message}</p>
           </div>
           <div>

@@ -45,7 +45,7 @@ export default function LoginPage() {
         <p className="mt-1 text-sm text-slate-400">Xác thực trước khi truy cập dashboard.</p>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
           <div>
-            <Input placeholder="wtuananh6886@gmail.com" {...register("email")} />
+            <Input placeholder="email@domain.com" {...register("email")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.email?.message}</p>
           </div>
           <div>
