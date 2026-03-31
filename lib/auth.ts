@@ -12,7 +12,7 @@ export async function getSessionRole(): Promise<Role | null> {
 export function hasPermission(role: Role, perm: string) {
   const map: Record<Role, string[]> = {
     owner: ["all"],
-    admin: ["dashboard", "licenses", "servers", "tweaks", "logs", "settings"],
+    admin: ["all"],
     support: ["dashboard", "licenses", "logs"],
     viewer: ["dashboard", "logs"],
   };

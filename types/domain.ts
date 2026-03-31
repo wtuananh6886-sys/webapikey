@@ -86,3 +86,15 @@ export interface UserPackage {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface AccountPolicy {
+  email: string;
+  role: Role;
+  assignedPlan: LicensePlan;
+  monthlyPackageTokenLimit: number;
+  monthlyKeyLimit: number;
+  packageTokensUsedThisMonth: number;
+  keysUsedThisMonth: number;
+  expiresAt: string | null;
+  updatedAt: string;
+}

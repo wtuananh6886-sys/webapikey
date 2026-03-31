@@ -15,26 +15,39 @@ const nav = [
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
+type MePolicy = {
+  assignedPlan: string;
+  monthlyPackageTokenLimit: number;
+  monthlyKeyLimit: number;
+  packageTokensUsedThisMonth: number;
+  keysUsedThisMonth: number;
+  expiresAt: string | null;
+  usageMonth?: string;
+};
+
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [role, setRole] = useState("viewer");
+  const [policy, setPolicy] = useState<MePolicy | null>(null);
 
   useEffect(() => {
     const loadMe = async () => {
       const res = await fetch("/api/auth/me", { method: "GET" });
       if (!res.ok) return;
-      const body = (await res.json()) as { role?: string };
+      const body = (await res.json()) as { role?: string; policy?: MePolicy | null };
       if (body.role) setRole(body.role);
+      if (body.policy) setPolicy(body.policy);
     };
     void loadMe();
   }, []);
 
   const currentPackage = useMemo(() => {
+    if (policy?.assignedPlan) return `${policy.assignedPlan} plan`;
     if (role === "owner" || role === "admin") return "Premium Admin Suite";
     if (role === "support") return "Support Control";
     return "Viewer Readonly";
-  }, [role]);
+  }, [role, policy?.assignedPlan]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -54,8 +67,22 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <div className="mb-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/5 p-3">
           <p className="text-[11px] uppercase tracking-wide text-cyan-300/80">Current account</p>
           <p className="mt-1 text-sm font-semibold text-white">{role.toUpperCase()}</p>
-          <p className="mt-1 text-xs text-slate-300">Package: {currentPackage}</p>
-          <p className="mt-1 text-xs text-slate-400">Admin panel has full permission.</p>
+          <p className="mt-1 text-xs text-slate-300">Assigned plan: {currentPackage}</p>
+          {policy && role !== "owner" && role !== "admin" ? (
+            <>
+              <p className="mt-1 text-xs text-slate-400">
+                Packages this month: {policy.packageTokensUsedThisMonth}/{policy.monthlyPackageTokenLimit}
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Keys this month: {policy.keysUsedThisMonth}/{policy.monthlyKeyLimit}
+              </p>
+              {policy.expiresAt ? (
+                <p className="mt-1 text-xs text-amber-200/90">Access until: {new Date(policy.expiresAt).toLocaleString()}</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="mt-1 text-xs text-slate-400">Full dashboard access for this role.</p>
+          )}
         </div>
         <nav className="space-y-2">
           {nav.map((item) => {

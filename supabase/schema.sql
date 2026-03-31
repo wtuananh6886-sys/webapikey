@@ -1,11 +1,52 @@
 create extension if not exists "pgcrypto";
 
-create type role_type as enum ('owner','admin','support','viewer');
-create type admin_status as enum ('active','suspended','invited');
-create type license_status as enum ('active','inactive','expired','banned','revoked');
-create type server_status as enum ('online','offline','warning','maintenance');
-create type tweak_status as enum ('draft','active','archived','disabled');
-create type severity_level as enum ('info','warning','error','critical');
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'role_type') then
+    create type role_type as enum ('owner','admin','support','viewer');
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'admin_status') then
+    create type admin_status as enum ('active','suspended','invited');
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'license_status') then
+    create type license_status as enum ('active','inactive','expired','banned','revoked');
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'server_status') then
+    create type server_status as enum ('online','offline','warning','maintenance');
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'tweak_status') then
+    create type tweak_status as enum ('draft','active','archived','disabled');
+  end if;
+end
+$$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'severity_level') then
+    create type severity_level as enum ('info','warning','error','critical');
+  end if;
+end
+$$;
 
 create table if not exists users (
   id uuid primary key default gen_random_uuid(),
@@ -137,3 +178,39 @@ create table if not exists settings (
   updated_at timestamptz not null default now(),
   unique(category, key)
 );
+
+create table if not exists account_policies (
+  id uuid primary key default gen_random_uuid(),
+  email text not null unique,
+  role role_type not null default 'viewer',
+  assigned_plan text not null default 'basic',
+  monthly_package_token_limit int not null default 3,
+  monthly_key_limit int not null default 30,
+  package_tokens_used_this_month int not null default 0,
+  keys_used_this_month int not null default 0,
+  usage_month text not null default to_char(now(), 'YYYY-MM'),
+  expires_at timestamptz,
+  updated_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+alter table account_policies add column if not exists role role_type default 'viewer';
+alter table account_policies add column if not exists assigned_plan text default 'basic';
+alter table account_policies add column if not exists monthly_package_token_limit int default 3;
+alter table account_policies add column if not exists monthly_key_limit int default 30;
+alter table account_policies add column if not exists package_tokens_used_this_month int default 0;
+alter table account_policies add column if not exists keys_used_this_month int default 0;
+alter table account_policies add column if not exists usage_month text default to_char(now(), 'YYYY-MM');
+alter table account_policies add column if not exists expires_at timestamptz;
+alter table account_policies add column if not exists updated_at timestamptz default now();
+alter table account_policies add column if not exists created_at timestamptz default now();
+
+-- Optional: seed or upgrade owner policy (replace email). Run once after tables exist.
+-- insert into account_policies (email, role, assigned_plan, monthly_package_token_limit, monthly_key_limit, package_tokens_used_this_month, keys_used_this_month, usage_month, updated_at)
+-- values ('your-email@example.com', 'owner', 'premium', 99999, 999999, 0, 0, to_char(now(), 'YYYY-MM'), now())
+-- on conflict (email) do update set
+--   role = excluded.role,
+--   assigned_plan = excluded.assigned_plan,
+--   monthly_package_token_limit = excluded.monthly_package_token_limit,
+--   monthly_key_limit = excluded.monthly_key_limit,
+--   updated_at = now();

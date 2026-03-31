@@ -1,4 +1,4 @@
-import type { ActivityLog, AdminUser, License, LicenseUsageLog, ServerNode, TweakPackage, UserPackage } from "@/types/domain";
+import type { AccountPolicy, ActivityLog, AdminUser, License, LicenseUsageLog, ServerNode, TweakPackage, UserPackage } from "@/types/domain";
 
 export const licenses: License[] = [
   {
@@ -147,5 +147,19 @@ export const userPackages: UserPackage[] = [
     status: "active",
     createdAt: "2026-03-05T08:00:00Z",
     updatedAt: "2026-03-31T08:00:00Z",
+  },
+];
+
+export const accountPolicies: AccountPolicy[] = [
+  {
+    email: "wtuananh6886@gmail.com",
+    role: "owner",
+    assignedPlan: "premium",
+    monthlyPackageTokenLimit: 9999,
+    monthlyKeyLimit: 99999,
+    packageTokensUsedThisMonth: 0,
+    keysUsedThisMonth: 0,
+    expiresAt: null,
+    updatedAt: new Date().toISOString(),
   },
 ];

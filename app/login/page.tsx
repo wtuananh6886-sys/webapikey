@@ -10,8 +10,8 @@ import { Button, Input } from "@/components/ui-kit";
 import { toast } from "sonner";
 
 const schema = z.object({
-  email: z.string().email("Email không hợp lệ"),
-  password: z.string().min(6, "Tối thiểu 6 ký tự"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Minimum 6 characters"),
 });
 
 type FormValues = z.infer<typeof schema>;
@@ -32,7 +32,7 @@ export default function LoginPage() {
     });
     setLoading(false);
     if (!res.ok) {
-      toast.error("Sai thông tin đăng nhập");
+      toast.error("Invalid login credentials");
       return;
     }
     router.push("/dashboard");
@@ -41,8 +41,8 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md rounded-2xl border bg-[#0f1726]/90 p-6">
-        <h1 className="text-2xl font-semibold">Đăng nhập Admin</h1>
-        <p className="mt-1 text-sm text-slate-400">Xác thực trước khi truy cập dashboard.</p>
+        <h1 className="text-2xl font-semibold">Welcome back</h1>
+        <p className="mt-1 text-sm text-slate-400">Sign in to manage your licenses, packages, and users.</p>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
           <div>
             <Input placeholder="email@domain.com" {...register("email")} />
@@ -53,13 +53,13 @@ export default function LoginPage() {
             <p className="mt-1 text-xs text-red-400">{formState.errors.password?.message}</p>
           </div>
           <Button disabled={loading} className="w-full">
-            {loading ? "Đang xử lý..." : "Sign in"}
+            {loading ? "Signing in..." : "Sign in"}
           </Button>
         </form>
         <p className="mt-4 text-center text-sm text-slate-400">
-          Chua co tai khoan?{" "}
+          Don&apos;t have an account?{" "}
           <Link href="/register" className="text-cyan-300 hover:text-cyan-200">
-            Dang ky ngay
+            Create one
           </Link>
         </p>
       </div>

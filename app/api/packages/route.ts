@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { userPackages } from "@/lib/mock-data";
+import { monthTag } from "@/lib/account-policy";
+import { accountPolicies, userPackages } from "@/lib/mock-data";
 import type { UserPackage } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -30,6 +31,50 @@ async function getAuthContext() {
   const role = cookieStore.get("wa_role")?.value ?? "viewer";
   const email = (cookieStore.get("wa_email")?.value ?? "viewer@local").toLowerCase();
   return { role, email };
+}
+
+async function consumePackageTokenQuota(email: string) {
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const currentMonth = monthTag();
+      const { data: row, error } = await supabase
+        .from("account_policies")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+      if (error) return { ok: false as const, status: 500, message: error.message };
+      if (!row) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+      if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+        return { ok: false as const, status: 403, message: "Account policy expired" };
+      }
+      const used = row.usage_month === currentMonth ? row.package_tokens_used_this_month : 0;
+      if (used >= row.monthly_package_token_limit) {
+        return { ok: false as const, status: 403, message: "Monthly package token limit exceeded" };
+      }
+      const { error: updateErr } = await supabase
+        .from("account_policies")
+        .update({
+          package_tokens_used_this_month: used + 1,
+          usage_month: currentMonth,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("email", email);
+      if (updateErr) return { ok: false as const, status: 500, message: updateErr.message };
+      return { ok: true as const };
+    }
+  }
+  const policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
+  if (!policy) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+  if (policy.expiresAt && new Date(policy.expiresAt).getTime() < Date.now()) {
+    return { ok: false as const, status: 403, message: "Account policy expired" };
+  }
+  if (policy.packageTokensUsedThisMonth >= policy.monthlyPackageTokenLimit) {
+    return { ok: false as const, status: 403, message: "Monthly package token limit exceeded" };
+  }
+  policy.packageTokensUsedThisMonth += 1;
+  policy.updatedAt = new Date().toISOString();
+  return { ok: true as const };
 }
 
 export async function GET() {
@@ -76,7 +121,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const { email } = await getAuthContext();
+  const { email, role } = await getAuthContext();
   const payload = await req.json();
   const parsed = CreatePackageSchema.safeParse(payload);
   if (!parsed.success) {
@@ -85,8 +130,15 @@ export async function POST(req: Request) {
 
   const normalized = normalizePackageName(parsed.data.name);
   if (!normalized) return NextResponse.json({ message: "Invalid package name" }, { status: 400 });
-  const existed = userPackages.some((pkg) => pkg.name === normalized);
-  if (existed) return NextResponse.json({ message: "Package already exists" }, { status: 409 });
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const { data: dup } = await supabase.from("user_packages").select("id").eq("name", normalized).maybeSingle();
+      if (dup) return NextResponse.json({ message: "Package already exists" }, { status: 409 });
+    }
+  } else if (userPackages.some((pkg) => pkg.name === normalized)) {
+    return NextResponse.json({ message: "Package already exists" }, { status: 409 });
+  }
 
   const now = new Date().toISOString();
   const created: UserPackage = {
@@ -98,6 +150,12 @@ export async function POST(req: Request) {
     createdAt: now,
     updatedAt: now,
   };
+  if (!(role === "owner" || role === "admin")) {
+    const quota = await consumePackageTokenQuota(email);
+    if (!quota.ok) {
+      return NextResponse.json({ message: quota.message }, { status: quota.status });
+    }
+  }
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {

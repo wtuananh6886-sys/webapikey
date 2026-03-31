@@ -432,7 +432,7 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
         return;
     }
 
-    NSString *host = NSSENCRYPT("http://192.168.1.79:3000");
+    NSString *host = NSSENCRYPT("https://webapikey-sable.vercel.app");
     NSURL *url = [NSURL URLWithString:[host stringByAppendingString:NSSENCRYPT("/api/licenses/verify")]];
     if (!url) {
         self.autoVerifyInProgress = NO;

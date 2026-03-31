@@ -72,7 +72,7 @@ Neu thieu doan nay, key UI hien nhung menu van co the mo.
 Trong `AOVLicenseGateManager.mm`:
 
 ```objc
-NSString *host = NSSENCRYPT("http://192.168.1.79:3000");
+NSString *host = NSSENCRYPT("https://webapikey-sable.vercel.app");
 ```
 
 Doi thanh host/domain cua ban.

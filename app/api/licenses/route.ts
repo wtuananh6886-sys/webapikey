@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { z } from "zod";
-import { licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
+import { monthTag } from "@/lib/account-policy";
+import { accountPolicies, licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
 import type { License } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -80,6 +82,64 @@ function keyMatchesFormat(key: string, packageName: string, durationDays: number
   return pattern.test(key);
 }
 
+async function consumeKeyQuota(email: string, requiredPlan: "basic" | "pro" | "premium") {
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const currentMonth = monthTag();
+      const { data: row, error } = await supabase
+        .from("account_policies")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+      if (error) return { ok: false as const, status: 500, message: error.message };
+      if (!row) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+      if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+        return { ok: false as const, status: 403, message: "Account policy expired" };
+      }
+      if (row.assigned_plan !== requiredPlan) {
+        return {
+          ok: false as const,
+          status: 403,
+          message: `Plan not allowed for your account. Assigned plan: ${row.assigned_plan}`,
+        };
+      }
+      const used = row.usage_month === currentMonth ? row.keys_used_this_month : 0;
+      if (used >= row.monthly_key_limit) {
+        return { ok: false as const, status: 403, message: "Monthly key limit exceeded" };
+      }
+      const { error: updateErr } = await supabase
+        .from("account_policies")
+        .update({
+          keys_used_this_month: used + 1,
+          usage_month: currentMonth,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("email", email);
+      if (updateErr) return { ok: false as const, status: 500, message: updateErr.message };
+      return { ok: true as const };
+    }
+  }
+  const policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
+  if (!policy) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+  if (policy.expiresAt && new Date(policy.expiresAt).getTime() < Date.now()) {
+    return { ok: false as const, status: 403, message: "Account policy expired" };
+  }
+  if (policy.keysUsedThisMonth >= policy.monthlyKeyLimit) {
+    return { ok: false as const, status: 403, message: "Monthly key limit exceeded" };
+  }
+  if (requiredPlan !== policy.assignedPlan) {
+    return {
+      ok: false as const,
+      status: 403,
+      message: `Plan not allowed for your account. Assigned plan: ${policy.assignedPlan}`,
+    };
+  }
+  policy.keysUsedThisMonth += 1;
+  policy.updatedAt = new Date().toISOString();
+  return { ok: true as const };
+}
+
 async function insertLicenseLog(params: {
   licenseId: string;
   action: string;
@@ -132,6 +192,9 @@ export async function POST(req: Request) {
   }
 
   const data = parsed.data;
+  const cookieStore = await cookies();
+  const role = cookieStore.get("wa_role")?.value ?? "viewer";
+  const email = (cookieStore.get("wa_email")?.value ?? "viewer@local").toLowerCase();
   const computedExpiry = (() => {
     if (data.expiresAt) return data.expiresAt;
     const d = new Date();
@@ -170,6 +233,12 @@ export async function POST(req: Request) {
     }
   }
   const durationDays = data.durationDays ?? 30;
+  if (!(role === "owner" || role === "admin")) {
+    const quota = await consumeKeyQuota(email, data.plan);
+    if (!quota.ok) {
+      return NextResponse.json({ message: quota.message }, { status: quota.status });
+    }
+  }
   const generatedKey = generatePackageBoundLicenseKey(normalizedPackageName, durationDays);
   const finalKey = data.keyMode === "static" ? data.key!.trim().toUpperCase() : generatedKey;
 

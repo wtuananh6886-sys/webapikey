@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { admins, adminCredentials } from "@/lib/mock-data";
+import { monthTag } from "@/lib/account-policy";
+import { accountPolicies, admins, adminCredentials } from "@/lib/mock-data";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 import type { AdminUser, Role } from "@/types/domain";
 
@@ -8,7 +9,6 @@ const RegisterSchema = z.object({
   username: z.string().min(3).max(40),
   email: z.string().email(),
   password: z.string().min(6).max(128),
-  role: z.enum(["owner", "admin", "support", "viewer"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "Email already registered" }, { status: 409 });
   }
 
-  const selectedRole: Role = data.role ?? "viewer";
+  const selectedRole: Role = "viewer";
   adminCredentials.push({
     email,
     password: data.password,
@@ -44,6 +44,17 @@ export async function POST(req: Request) {
     createdAt: now,
   };
   admins.unshift(profile);
+  accountPolicies.push({
+    email,
+    role: "viewer",
+    assignedPlan: "basic",
+    monthlyPackageTokenLimit: 3,
+    monthlyKeyLimit: 30,
+    packageTokensUsedThisMonth: 0,
+    keysUsedThisMonth: 0,
+    expiresAt: null,
+    updatedAt: now,
+  });
 
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
@@ -60,6 +71,21 @@ export async function POST(req: Request) {
           role: selectedRole,
           status: "active",
         });
+        await supabase.from("account_policies").upsert(
+          {
+            email,
+            role: selectedRole,
+            assigned_plan: "basic",
+            monthly_package_token_limit: 3,
+            monthly_key_limit: 30,
+            package_tokens_used_this_month: 0,
+            keys_used_this_month: 0,
+            usage_month: monthTag(),
+            expires_at: null,
+            updated_at: now,
+          },
+          { onConflict: "email" }
+        );
       }
     }
   }
