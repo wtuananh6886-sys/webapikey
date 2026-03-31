@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -44,7 +45,7 @@ export default function LoginPage() {
         <p className="mt-1 text-sm text-slate-400">Xác thực trước khi truy cập dashboard.</p>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
           <div>
-            <Input placeholder="owner@aovpro.com" {...register("email")} />
+            <Input placeholder="wtuananh6886@gmail.com" {...register("email")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.email?.message}</p>
           </div>
           <div>
@@ -55,6 +56,12 @@ export default function LoginPage() {
             {loading ? "Đang xử lý..." : "Sign in"}
           </Button>
         </form>
+        <p className="mt-4 text-center text-sm text-slate-400">
+          Chua co tai khoan?{" "}
+          <Link href="/register" className="text-cyan-300 hover:text-cyan-200">
+            Dang ky ngay
+          </Link>
+        </p>
       </div>
     </div>
   );
