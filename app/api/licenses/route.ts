@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { monthTag } from "@/lib/account-policy";
+import { defaultLimitsForRole, ensureAccountPolicyRow, monthTag } from "@/lib/account-policy";
 import { accountPolicies, licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
-import type { License } from "@/types/domain";
+import type { AccountPolicy, License, Role } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
 const CreateLicenseSchema = z.object({
@@ -82,10 +82,21 @@ function keyMatchesFormat(key: string, packageName: string, durationDays: number
   return pattern.test(key);
 }
 
-async function consumeKeyQuota(email: string, requiredPlan: "basic" | "pro" | "premium") {
+function parseRole(raw: string | undefined): Role {
+  if (raw === "owner" || raw === "admin" || raw === "support" || raw === "viewer") return raw;
+  return "viewer";
+}
+
+async function consumeKeyQuota(
+  email: string,
+  role: Role,
+  requiredPlan: "basic" | "pro" | "premium"
+) {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
+      const ensured = await ensureAccountPolicyRow(supabase, email, role);
+      if (!ensured.ok) return { ok: false as const, status: 500, message: ensured.message };
       const currentMonth = monthTag();
       const { data: row, error } = await supabase
         .from("account_policies")
@@ -120,8 +131,23 @@ async function consumeKeyQuota(email: string, requiredPlan: "basic" | "pro" | "p
       return { ok: true as const };
     }
   }
-  const policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
-  if (!policy) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+  let policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
+  if (!policy) {
+    const defaults = defaultLimitsForRole(role);
+    const createdPolicy: AccountPolicy = {
+      email: email.toLowerCase(),
+      role,
+      assignedPlan: defaults.assignedPlan,
+      monthlyPackageTokenLimit: defaults.monthlyPackageTokenLimit,
+      monthlyKeyLimit: defaults.monthlyKeyLimit,
+      packageTokensUsedThisMonth: 0,
+      keysUsedThisMonth: 0,
+      expiresAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+    policy = createdPolicy;
+    accountPolicies.push(createdPolicy);
+  }
   if (policy.expiresAt && new Date(policy.expiresAt).getTime() < Date.now()) {
     return { ok: false as const, status: 403, message: "Account policy expired" };
   }
@@ -234,7 +260,7 @@ export async function POST(req: Request) {
   }
   const durationDays = data.durationDays ?? 30;
   if (!(role === "owner" || role === "admin")) {
-    const quota = await consumeKeyQuota(email, data.plan);
+    const quota = await consumeKeyQuota(email, parseRole(role), data.plan);
     if (!quota.ok) {
       return NextResponse.json({ message: quota.message }, { status: quota.status });
     }

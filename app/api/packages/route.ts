@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { monthTag } from "@/lib/account-policy";
+import { defaultLimitsForRole, ensureAccountPolicyRow, monthTag } from "@/lib/account-policy";
 import { accountPolicies, userPackages } from "@/lib/mock-data";
-import type { UserPackage } from "@/types/domain";
+import type { AccountPolicy, PackageStatus, Role, UserPackage } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
 const CreatePackageSchema = z.object({
@@ -33,10 +33,17 @@ async function getAuthContext() {
   return { role, email };
 }
 
-async function consumePackageTokenQuota(email: string) {
+function parseRole(raw: string | undefined): Role {
+  if (raw === "owner" || raw === "admin" || raw === "support" || raw === "viewer") return raw;
+  return "viewer";
+}
+
+async function consumePackageTokenQuota(email: string, role: Role) {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
+      const ensured = await ensureAccountPolicyRow(supabase, email, role);
+      if (!ensured.ok) return { ok: false as const, status: 500, message: ensured.message };
       const currentMonth = monthTag();
       const { data: row, error } = await supabase
         .from("account_policies")
@@ -64,8 +71,23 @@ async function consumePackageTokenQuota(email: string) {
       return { ok: true as const };
     }
   }
-  const policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
-  if (!policy) return { ok: false as const, status: 403, message: "No policy assigned for this account" };
+  let policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
+  if (!policy) {
+    const defaults = defaultLimitsForRole(role);
+    const createdPolicy: AccountPolicy = {
+      email: email.toLowerCase(),
+      role,
+      assignedPlan: defaults.assignedPlan,
+      monthlyPackageTokenLimit: defaults.monthlyPackageTokenLimit,
+      monthlyKeyLimit: defaults.monthlyKeyLimit,
+      packageTokensUsedThisMonth: 0,
+      keysUsedThisMonth: 0,
+      expiresAt: null,
+      updatedAt: new Date().toISOString(),
+    };
+    policy = createdPolicy;
+    accountPolicies.push(createdPolicy);
+  }
   if (policy.expiresAt && new Date(policy.expiresAt).getTime() < Date.now()) {
     return { ok: false as const, status: 403, message: "Account policy expired" };
   }
@@ -151,7 +173,7 @@ export async function POST(req: Request) {
     updatedAt: now,
   };
   if (!(role === "owner" || role === "admin")) {
-    const quota = await consumePackageTokenQuota(email);
+    const quota = await consumePackageTokenQuota(email, parseRole(role));
     if (!quota.ok) {
       return NextResponse.json({ message: quota.message }, { status: quota.status });
     }
@@ -159,27 +181,54 @@ export async function POST(req: Request) {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
-      const { data, error } = await supabase
-        .from("user_packages")
-        .insert({
-          name: created.name,
-          token: created.token,
-          owner_email: created.ownerEmail,
-          status: created.status,
-        })
-        .select("*")
-        .single();
-      if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+      let data: Record<string, unknown> | null = null;
+      let lastError: { message: string; code?: string } | null = null;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const token = attempt === 0 ? created.token : generatePackageToken();
+        const res = await supabase
+          .from("user_packages")
+          .insert({
+            name: created.name,
+            token,
+            owner_email: created.ownerEmail,
+            status: created.status,
+          })
+          .select("*")
+          .single();
+        if (!res.error && res.data) {
+          data = res.data as Record<string, unknown>;
+          break;
+        }
+        lastError = res.error ?? { message: "insert_failed" };
+        const code = (res.error as { code?: string })?.code;
+        const msg = res.error?.message ?? "";
+        if (code === "23505" && (msg.includes("token") || msg.includes("user_packages_token"))) {
+          continue;
+        }
+        return NextResponse.json({ message: res.error?.message ?? "Insert failed" }, { status: 500 });
+      }
+      if (!data) {
+        return NextResponse.json({ message: lastError?.message ?? "Insert failed after retries" }, { status: 500 });
+      }
+      const row = data as {
+        id: string;
+        name: string;
+        token: string;
+        owner_email: string;
+        status: string;
+        created_at: string;
+        updated_at: string;
+      };
       return NextResponse.json(
         {
           data: {
-            id: data.id,
-            name: data.name,
-            token: data.token,
-            ownerEmail: data.owner_email,
-            status: data.status,
-            createdAt: data.created_at,
-            updatedAt: data.updated_at,
+            id: row.id,
+            name: row.name,
+            token: row.token,
+            ownerEmail: row.owner_email,
+            status: row.status as PackageStatus,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
           } satisfies UserPackage,
         },
         { status: 201 }

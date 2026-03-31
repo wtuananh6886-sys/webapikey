@@ -68,6 +68,42 @@ export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email
   if (updErr) throw updErr;
 }
 
+/**
+ * Create policy row if missing (e.g. user registered before table existed, or never synced on login).
+ * Does not reset usage for existing rows.
+ */
+export async function ensureAccountPolicyRow(supabase: SupabaseClient, email: string, role: Role) {
+  const normalized = email.toLowerCase().trim();
+  const m = monthTag();
+  const defaults = defaultLimitsForRole(role);
+
+  const { data: existing, error: readErr } = await supabase
+    .from("account_policies")
+    .select("id")
+    .eq("email", normalized)
+    .maybeSingle();
+  if (readErr) return { ok: false as const, message: readErr.message };
+  if (existing) return { ok: true as const };
+
+  const { error: insErr } = await supabase.from("account_policies").insert({
+    email: normalized,
+    role,
+    assigned_plan: defaults.assignedPlan,
+    monthly_package_token_limit: defaults.monthlyPackageTokenLimit,
+    monthly_key_limit: defaults.monthlyKeyLimit,
+    package_tokens_used_this_month: 0,
+    keys_used_this_month: 0,
+    usage_month: m,
+    expires_at: null,
+    updated_at: new Date().toISOString(),
+  });
+  if (insErr) {
+    if (insErr.code === "23505") return { ok: true as const };
+    return { ok: false as const, message: insErr.message };
+  }
+  return { ok: true as const };
+}
+
 export function mapPolicyRowToApi(row: {
   assigned_plan: string;
   monthly_package_token_limit: number;

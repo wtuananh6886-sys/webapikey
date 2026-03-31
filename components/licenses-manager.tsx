@@ -147,7 +147,8 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
         body: JSON.stringify({ name: values.packageName }),
       });
       if (!res.ok) {
-        toast.error("Tao package that bai");
+        const err = (await res.json().catch(() => null)) as { message?: string } | null;
+        toast.error(err?.message ?? "Failed to create package");
         return;
       }
       const body = (await res.json()) as { data: { name: string; token: string; status: string } };
