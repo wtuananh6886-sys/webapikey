@@ -8,7 +8,8 @@ export function parseRoleCookie(raw: string | undefined): Role | null {
 
 /**
  * Whether this dashboard path is allowed for the given role.
- * owner/admin: full console. support: no Users/Policies/Settings. viewer: Overview + Activity logs only.
+ * owner/admin: full console. support: Licenses/Servers/Tweaks/Logs (no Users/Policies/Settings).
+ * viewer: Overview + Activity logs only (read-only; không dùng cho user tự đăng ký — họ dùng support + gói basic/pro).
  */
 export function dashboardPathAllowed(role: Role, pathname: string): boolean {
   const p = pathname.endsWith("/") && pathname.length > 1 ? pathname.slice(0, -1) : pathname;

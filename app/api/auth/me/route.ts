@@ -23,7 +23,8 @@ export async function GET() {
   }
 
   const personalPackage = slugifyPackageName(email);
-  const currentPackage = role === "owner" || role === "admin" ? "premium-admin" : role === "support" ? "support" : "viewer";
+  let currentPackage =
+    role === "owner" || role === "admin" ? "premium-admin" : role === "support" ? "support-console" : "viewer";
   let packages: string[] = [];
   let policy: ReturnType<typeof mapPolicyRowToApi> | null = null;
   let accountCreatedAt: string | null = null;
@@ -97,6 +98,10 @@ export async function GET() {
   if (!accountCreatedAt) {
     const mockProfile = admins.find((a) => a.email.toLowerCase() === email.toLowerCase());
     accountCreatedAt = mockProfile?.createdAt ?? null;
+  }
+
+  if (policy && role !== "owner" && role !== "admin") {
+    currentPackage = `Gói ${policy.assignedPlan}`;
   }
 
   return NextResponse.json({ role, currentPackage, email, username, packages, policy, accountCreatedAt });

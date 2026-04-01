@@ -25,7 +25,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "Email already registered" }, { status: 409 });
   }
 
-  const selectedRole: Role = "viewer";
+  /** support = tạo package/key, servers, tweaks (theo quota gói). viewer chỉ Overview+Logs — không phù hợp user tự đăng ký. */
+  const selectedRole: Role = "support";
   adminCredentials.push({
     email,
     password: data.password,
@@ -46,7 +47,7 @@ export async function POST(req: Request) {
   admins.unshift(profile);
   accountPolicies.push({
     email,
-    role: "viewer",
+    role: selectedRole,
     assignedPlan: "basic",
     monthlyPackageTokenLimit: 3,
     monthlyKeyLimit: 30,
