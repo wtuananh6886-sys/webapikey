@@ -245,6 +245,15 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const session = await getWaSession();
   if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   if (session.role === "viewer") {
@@ -371,6 +380,15 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const session = await getWaSession();
   if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   if (session.role === "viewer") {
@@ -517,6 +535,15 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const session = await getWaSession();
   if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   if (session.role === "viewer") {

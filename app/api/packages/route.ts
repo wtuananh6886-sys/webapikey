@@ -164,6 +164,15 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const { email, role } = await getAuthContext();
   const payload = await req.json();
   const parsed = CreatePackageSchema.safeParse(payload);
@@ -261,6 +270,15 @@ export async function POST(req: Request) {
 }
 
 export async function PATCH(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const { email, role } = await getAuthContext();
   const payload = await req.json();
   const parsed = PatchPackageSchema.safeParse(payload);
@@ -413,6 +431,15 @@ export async function PATCH(req: Request) {
  * Soft-delete package: chỉ owner hoặc admin. Bản ghi vẫn trên DB (status archived + archived_at) để theo dõi / audit.
  */
 export async function DELETE(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel.",
+      },
+      { status: 503 }
+    );
+  }
   const { email, role } = await getAuthContext();
   if (role !== "owner" && role !== "admin") {
     return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được gỡ package" }, { status: 403 });

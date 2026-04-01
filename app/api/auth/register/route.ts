@@ -12,6 +12,15 @@ const RegisterSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Persistence chưa được bật trên production. Hãy cấu hình NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trên Vercel trước khi tạo tài khoản.",
+      },
+      { status: 503 }
+    );
+  }
   const payload = await req.json();
   const parsed = RegisterSchema.safeParse(payload);
   if (!parsed.success) {

@@ -42,6 +42,13 @@ type MePolicy = {
   usageMonth?: string;
 };
 
+type PersistenceHealth = {
+  ok: boolean;
+  mode: "supabase" | "mock";
+  message: string;
+  checks: { env: boolean; db: boolean; schema: boolean };
+};
+
 function NavLinks({
   pathname,
   onNavigate,
@@ -87,6 +94,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const [username, setUsername] = useState("");
   const [policy, setPolicy] = useState<MePolicy | null>(null);
   const [accountCreatedAt, setAccountCreatedAt] = useState<string | null>(null);
+  const [persistence, setPersistence] = useState<PersistenceHealth | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   useEffect(() => {
@@ -107,6 +115,20 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       setAccountCreatedAt(body.accountCreatedAt ?? null);
     };
     void loadMe();
+  }, []);
+
+  useEffect(() => {
+    const loadPersistence = async () => {
+      try {
+        const res = await fetch("/api/health/persistence", { method: "GET", credentials: "same-origin" });
+        if (!res.ok) return;
+        const body = (await res.json()) as PersistenceHealth;
+        setPersistence(body);
+      } catch {
+        setPersistence(null);
+      }
+    };
+    void loadPersistence();
   }, []);
 
   useEffect(() => {
@@ -166,6 +188,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       ) : null}
       <p className="mt-2 text-sm font-semibold text-white">{role.toUpperCase()}</p>
       <p className="mt-1 text-xs text-slate-300">Plan: {currentPackage}</p>
+      {persistence ? (
+        <p
+          className={`mt-1 text-xs ${
+            persistence.ok ? "text-emerald-300/90" : "text-amber-200/90"
+          }`}
+        >
+          Persistence: {persistence.ok ? "Supabase OK" : "Mock/Not Ready"}
+        </p>
+      ) : null}
       {policy && role !== "owner" ? (
         <>
           <p className="mt-1 text-xs text-slate-400">
