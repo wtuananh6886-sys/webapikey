@@ -40,6 +40,8 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
   const [submitting, setSubmitting] = useState(false);
   const [accountPackages, setAccountPackages] = useState<Array<{ name: string; token: string; status: string }>>([]);
   const [accountRole, setAccountRole] = useState("viewer");
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountUsername, setAccountUsername] = useState("");
   const [currentPackage, setCurrentPackage] = useState("viewer");
   const [creatingPackage, setCreatingPackage] = useState(false);
 
@@ -81,9 +83,16 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
   const refreshAccountContext = useCallback(async () => {
     const profileRes = await fetch("/api/auth/me", { method: "GET" });
     if (!profileRes.ok) return;
-    const profile = (await profileRes.json()) as { role?: string; currentPackage?: string };
+    const profile = (await profileRes.json()) as {
+      role?: string;
+      currentPackage?: string;
+      email?: string;
+      username?: string;
+    };
     if (profile.role) setAccountRole(profile.role);
     if (profile.currentPackage) setCurrentPackage(profile.currentPackage);
+    if (profile.email) setAccountEmail(profile.email);
+    if (profile.username) setAccountUsername(profile.username);
 
     const res = await fetch("/api/packages", { method: "GET" });
     if (!res.ok) return;
@@ -191,6 +200,8 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
         <Card>
           <h3 className="mb-3 text-base font-semibold">Current account package</h3>
           <div className="space-y-2 text-sm text-slate-300">
+            <p><span className="font-medium text-white">Email:</span> {accountEmail || "—"}</p>
+            <p><span className="font-medium text-white">Username:</span> {accountUsername || "—"}</p>
             <p><span className="font-medium text-white">Role:</span> {accountRole}</p>
             <p><span className="font-medium text-white">Current package:</span> {currentPackage}</p>
             <p><span className="font-medium text-white">Your packages:</span> {accountPackages.map((pkg) => pkg.name).join(", ") || "loading..."}</p>

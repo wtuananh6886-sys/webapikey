@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { accountPolicies, userPackages } from "@/lib/mock-data";
+import { accountPolicies, adminCredentials, userPackages } from "@/lib/mock-data";
 import { mapPolicyRowToApi } from "@/lib/account-policy";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -16,6 +16,12 @@ export async function GET() {
   const cookieStore = await cookies();
   const role = cookieStore.get("wa_role")?.value ?? "viewer";
   const email = cookieStore.get("wa_email")?.value ?? "viewer@local";
+  let username = cookieStore.get("wa_username")?.value?.trim() ?? null;
+  if (!username) {
+    const cred = adminCredentials.find((c) => c.email.toLowerCase() === email.toLowerCase());
+    username = cred?.username ?? email.split("@")[0] ?? "user";
+  }
+
   const personalPackage = slugifyPackageName(email);
   const currentPackage = role === "owner" || role === "admin" ? "premium-admin" : role === "support" ? "support" : "viewer";
   let packages: string[] = [];
@@ -24,6 +30,18 @@ export async function GET() {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
+      const { data: userRow } = await supabase.from("users").select("id").eq("email", email.toLowerCase()).maybeSingle();
+      if (userRow?.id) {
+        const { data: prof } = await supabase
+          .from("admin_profiles")
+          .select("username")
+          .eq("user_id", userRow.id)
+          .maybeSingle();
+        if (prof?.username && String(prof.username).trim().length > 0) {
+          username = String(prof.username).trim();
+        }
+      }
+
       const query = supabase.from("user_packages").select("name").order("created_at", { ascending: false });
       const { data } =
         role === "owner" || role === "admin"
@@ -61,5 +79,5 @@ export async function GET() {
     packages = accessiblePackages.length > 0 ? accessiblePackages.map((pkg) => pkg.name) : [personalPackage];
   }
 
-  return NextResponse.json({ role, currentPackage, email, packages, policy });
+  return NextResponse.json({ role, currentPackage, email, username, packages, policy });
 }

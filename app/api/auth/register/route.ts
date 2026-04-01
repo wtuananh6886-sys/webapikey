@@ -93,5 +93,6 @@ export async function POST(req: Request) {
   const response = NextResponse.json({ ok: true, role: selectedRole });
   response.cookies.set("wa_role", selectedRole, { httpOnly: true, path: "/" });
   response.cookies.set("wa_email", email, { httpOnly: true, path: "/" });
+  response.cookies.set("wa_username", data.username.trim(), { httpOnly: true, path: "/" });
   return response;
 }

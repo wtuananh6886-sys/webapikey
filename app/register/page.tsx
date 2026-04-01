@@ -57,9 +57,9 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-6">
-      <div className="w-full max-w-md rounded-2xl border bg-[#0f1726]/90 p-6">
-        <h1 className="text-2xl font-semibold">Create your account</h1>
+    <div className="flex min-h-screen min-h-[100dvh] items-center justify-center px-4 py-8 sm:p-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#0f1726]/95 p-5 shadow-xl sm:p-6">
+        <h1 className="text-xl font-semibold sm:text-2xl">Create your account</h1>
         <p className="mt-1 text-sm text-slate-400">Start with a standard account and request elevated access later.</p>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
           <div>
