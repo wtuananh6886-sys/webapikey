@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button, Input } from "@/components/ui-kit";
+import { PasswordField } from "@/components/password-field";
 import { toast } from "sonner";
 
 const schema = z
@@ -52,8 +53,7 @@ export default function RegisterPage() {
       toast.error(err?.message ?? "Registration failed");
       return;
     }
-    toast.success("Registration successful");
-    router.push("/dashboard");
+    router.push("/login?registered=1");
   };
 
   return (
@@ -63,19 +63,19 @@ export default function RegisterPage() {
         <p className="mt-1 text-sm text-slate-400">Start with a standard account and request elevated access later.</p>
         <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
           <div>
-            <Input placeholder="Username" {...register("username")} />
+            <Input placeholder="Username" autoComplete="username" {...register("username")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.username?.message}</p>
           </div>
           <div>
-            <Input placeholder="email@domain.com" {...register("email")} />
+            <Input type="email" placeholder="email@domain.com" autoComplete="email" {...register("email")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.email?.message}</p>
           </div>
           <div>
-            <Input type="password" placeholder="Password" {...register("password")} />
+            <PasswordField autoComplete="new-password" placeholder="Password" {...register("password")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.password?.message}</p>
           </div>
           <div>
-            <Input type="password" placeholder="Confirm password" {...register("confirmPassword")} />
+            <PasswordField autoComplete="new-password" placeholder="Confirm password" {...register("confirmPassword")} />
             <p className="mt-1 text-xs text-red-400">{formState.errors.confirmPassword?.message}</p>
           </div>
           <Button disabled={loading} className="w-full">
