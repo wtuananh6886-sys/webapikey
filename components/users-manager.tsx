@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Search, Pencil, Trash2 } from "lucide-react";
 import { Badge, Button, Card, Input, Select } from "@/components/ui-kit";
 import type { AdminStatus, LicensePlan, Role } from "@/types/domain";
+import { quotaForAssignedPlan } from "@/lib/plan-quota";
 
 type UserRow = {
   id: string;
@@ -29,14 +30,27 @@ type UserRow = {
 
 type PolicyShape = NonNullable<UserRow["policy"]>;
 
-const emptyPolicy = (role: Role): PolicyShape => ({
-  assignedPlan: role === "owner" || role === "admin" ? "premium" : "basic",
-  monthlyPackageTokenLimit: role === "owner" || role === "admin" ? 99999 : 3,
-  monthlyKeyLimit: role === "owner" || role === "admin" ? 999999 : 30,
-  packageTokensUsedThisMonth: 0,
-  keysUsedThisMonth: 0,
-  expiresAt: null,
-});
+const emptyPolicy = (role: Role): PolicyShape => {
+  if (role === "owner") {
+    return {
+      assignedPlan: "premium",
+      monthlyPackageTokenLimit: 99_999,
+      monthlyKeyLimit: 999_999,
+      packageTokensUsedThisMonth: 0,
+      keysUsedThisMonth: 0,
+      expiresAt: null,
+    };
+  }
+  const q = quotaForAssignedPlan("basic");
+  return {
+    assignedPlan: "basic",
+    monthlyPackageTokenLimit: q.monthlyPackageTokenLimit,
+    monthlyKeyLimit: q.monthlyKeyLimit,
+    packageTokensUsedThisMonth: 0,
+    keysUsedThisMonth: 0,
+    expiresAt: null,
+  };
+};
 
 export function UsersManager() {
   const [rows, setRows] = useState<UserRow[]>([]);
@@ -204,8 +218,10 @@ export function UsersManager() {
                 filtered.map((row) => (
                   <tr key={row.id} className="border-t border-slate-800/80 align-top">
                     <td className="p-3">
-                      <p className="font-medium text-white">{row.username}</p>
-                      <p className="break-all text-xs text-slate-400">{row.email}</p>
+                      <p className="font-medium text-white" title={row.email}>
+                        {row.email}
+                      </p>
+                      <p className="break-all text-xs text-slate-400">@{row.username}</p>
                       {row.flags.isSelf ? <Badge className="mt-1">You</Badge> : null}
                       {row.flags.protectedOwner ? (
                         <Badge className="mt-1 border-amber-500/40 text-amber-200">Protected owner</Badge>
@@ -265,8 +281,10 @@ export function UsersManager() {
             <Card key={row.id} className="space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="font-semibold text-white">{row.username}</p>
-                  <p className="break-all text-xs text-slate-400">{row.email}</p>
+                  <p className="break-all font-semibold text-white" title={row.email}>
+                    {row.email}
+                  </p>
+                  <p className="text-xs text-slate-400">@{row.username}</p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <Badge>{row.role}</Badge>
@@ -327,16 +345,25 @@ export function UsersManager() {
                 <label className="mb-1 block text-xs text-slate-400">Assigned plan (license tier)</label>
                 <Select
                   value={editing.policy.assignedPlan}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const plan = e.target.value as LicensePlan;
+                    const q = quotaForAssignedPlan(plan);
+                    setPkgLimitStr(String(q.monthlyPackageTokenLimit));
+                    setKeyLimitStr(String(q.monthlyKeyLimit));
                     setEditing({
                       ...editing,
-                      policy: { ...editing.policy!, assignedPlan: e.target.value as LicensePlan },
-                    })
-                  }
+                      policy: {
+                        ...editing.policy!,
+                        assignedPlan: plan,
+                        monthlyPackageTokenLimit: q.monthlyPackageTokenLimit,
+                        monthlyKeyLimit: q.monthlyKeyLimit,
+                      },
+                    });
+                  }}
                 >
-                  <option value="basic">basic</option>
-                  <option value="pro">pro</option>
-                  <option value="premium">premium</option>
+                  <option value="basic">basic (3 pkg · 30 keys / tháng)</option>
+                  <option value="pro">pro (10 pkg · 200 keys / tháng)</option>
+                  <option value="premium">premium (50 pkg · 500 keys / tháng)</option>
                 </Select>
               </div>
               <div className="grid grid-cols-2 gap-2">

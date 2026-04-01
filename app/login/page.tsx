@@ -65,7 +65,11 @@ function LoginForm() {
   };
 
   return (
-    <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#0f1726]/95 p-5 shadow-xl sm:p-6">
+    <div
+      id="main-content"
+      tabIndex={-1}
+      className="auth-card-enter w-full max-w-md rounded-2xl border border-slate-700/80 bg-[#0f1726]/92 p-5 shadow-2xl shadow-black/40 backdrop-blur-xl sm:p-7"
+    >
       <h1 className="text-xl font-semibold sm:text-2xl">Welcome back</h1>
       <p className="mt-1 text-sm text-slate-400">Sign in with your email or username.</p>
       <form className="mt-6 space-y-4" onSubmit={handleSubmit(onSubmit)}>
@@ -98,7 +102,7 @@ function LoginForm() {
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-screen min-h-[100dvh] items-center justify-center px-4 py-8 sm:p-6">
+    <div className="flex min-h-screen min-h-[100dvh] items-center justify-center px-4 py-[max(2rem,env(safe-area-inset-bottom))] pt-[max(1.5rem,env(safe-area-inset-top))] sm:p-6">
       <Suspense fallback={<div className="w-full max-w-md rounded-2xl border border-slate-800 bg-[#0f1726]/95 p-8 text-center text-sm text-slate-400">Loading…</div>}>
         <LoginForm />
       </Suspense>

@@ -72,7 +72,17 @@ export interface ActivityLog {
 export interface LicenseUsageLog {
   id: string;
   licenseId: string;
-  action: "verify_ok" | "verify_fail" | "ban" | "revoke" | "extend" | "delete";
+  action:
+    | "verify_ok"
+    | "verify_fail"
+    | "ban"
+    | "revoke"
+    | "extend"
+    | "delete"
+    | "unban"
+    | "unrevoke"
+    | "activate"
+    | "deactivate";
   ip: string;
   deviceId: string | null;
   reason?: string;
@@ -87,6 +97,8 @@ export interface UserPackage {
   status: PackageStatus;
   createdAt: string;
   updatedAt: string;
+  /** Set when status is archived (soft delete — row kept for audit). */
+  archivedAt?: string | null;
   /** Shown on client enter-key screen (optional). */
   activationUiTitle?: string | null;
   activationUiSubtitle?: string | null;

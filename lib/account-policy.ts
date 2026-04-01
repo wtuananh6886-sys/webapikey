@@ -1,5 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { LicensePlan, Role } from "@/types/domain";
+import { quotaForAssignedPlan } from "@/lib/plan-quota";
+
+export { quotaForAssignedPlan } from "@/lib/plan-quota";
 
 export function monthTag() {
   const now = new Date();
@@ -7,25 +10,14 @@ export function monthTag() {
   return `${now.getFullYear()}-${m}`;
 }
 
-export function defaultLimitsForRole(role: Role): {
-  assignedPlan: LicensePlan;
-  monthlyPackageTokenLimit: number;
-  monthlyKeyLimit: number;
-} {
-  if (role === "owner" || role === "admin") {
-    return { assignedPlan: "premium", monthlyPackageTokenLimit: 99_999, monthlyKeyLimit: 999_999 };
-  }
-  if (role === "support") {
-    return { assignedPlan: "pro", monthlyPackageTokenLimit: 50, monthlyKeyLimit: 500 };
-  }
-  return { assignedPlan: "basic", monthlyPackageTokenLimit: 3, monthlyKeyLimit: 30 };
-}
-
-/** Ensure a row exists after login; sync role, do not wipe usage unless first insert. */
+/**
+ * After login: sync role only. Never inflate quotas when someone becomes admin.
+ * New row: basic 3 / 30 keys per month.
+ */
 export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email: string, role: Role) {
   const normalized = email.toLowerCase().trim();
   const m = monthTag();
-  const defaults = defaultLimitsForRole(role);
+  const basic = quotaForAssignedPlan("basic");
 
   const { data: existing, error: readErr } = await supabase
     .from("account_policies")
@@ -38,9 +30,9 @@ export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email
     const { error } = await supabase.from("account_policies").insert({
       email: normalized,
       role,
-      assigned_plan: defaults.assignedPlan,
-      monthly_package_token_limit: defaults.monthlyPackageTokenLimit,
-      monthly_key_limit: defaults.monthlyKeyLimit,
+      assigned_plan: "basic",
+      monthly_package_token_limit: basic.monthlyPackageTokenLimit,
+      monthly_key_limit: basic.monthlyKeyLimit,
       package_tokens_used_this_month: 0,
       keys_used_this_month: 0,
       usage_month: m,
@@ -51,31 +43,23 @@ export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email
     return;
   }
 
-  const patch: Record<string, unknown> = {
-    role,
-    updated_at: new Date().toISOString(),
-  };
-  if (role === "owner" || role === "admin") {
-    patch.assigned_plan = "premium";
-    patch.monthly_package_token_limit = Math.max(
-      existing.monthly_package_token_limit ?? 0,
-      defaults.monthlyPackageTokenLimit
-    );
-    patch.monthly_key_limit = Math.max(existing.monthly_key_limit ?? 0, defaults.monthlyKeyLimit);
-  }
-
-  const { error: updErr } = await supabase.from("account_policies").update(patch).eq("email", normalized);
+  const { error: updErr } = await supabase
+    .from("account_policies")
+    .update({
+      role,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("email", normalized);
   if (updErr) throw updErr;
 }
 
 /**
- * Create policy row if missing (e.g. user registered before table existed, or never synced on login).
- * Does not reset usage for existing rows.
+ * Create policy row if missing. Always starts at basic quotas (not role-based).
  */
 export async function ensureAccountPolicyRow(supabase: SupabaseClient, email: string, role: Role) {
   const normalized = email.toLowerCase().trim();
   const m = monthTag();
-  const defaults = defaultLimitsForRole(role);
+  const basic = quotaForAssignedPlan("basic");
 
   const { data: existing, error: readErr } = await supabase
     .from("account_policies")
@@ -88,9 +72,9 @@ export async function ensureAccountPolicyRow(supabase: SupabaseClient, email: st
   const { error: insErr } = await supabase.from("account_policies").insert({
     email: normalized,
     role,
-    assigned_plan: defaults.assignedPlan,
-    monthly_package_token_limit: defaults.monthlyPackageTokenLimit,
-    monthly_key_limit: defaults.monthlyKeyLimit,
+    assigned_plan: "basic",
+    monthly_package_token_limit: basic.monthlyPackageTokenLimit,
+    monthly_key_limit: basic.monthlyKeyLimit,
     package_tokens_used_this_month: 0,
     keys_used_this_month: 0,
     usage_month: m,

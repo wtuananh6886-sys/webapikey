@@ -71,6 +71,15 @@ export const tweaks: TweakPackage[] = [
 
 export const admins: AdminUser[] = [
   {
+    id: "adm_owner_mock",
+    username: "wtuananh6886-sys",
+    email: "wtuananh6886@gmail.com",
+    role: "owner",
+    status: "active",
+    lastLogin: "2026-03-31T09:00:00Z",
+    createdAt: "2025-08-15T10:30:00Z",
+  },
+  {
     id: "adm_01",
     username: "tuananh",
     email: "tuananh@aovpro.com",

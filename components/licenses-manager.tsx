@@ -9,6 +9,22 @@ import type { License } from "@/types/domain";
 import { Card, Button, Input, Select } from "@/components/ui-kit";
 import { TanstackLicenseTable } from "@/components/tanstack-license-table";
 
+function formatViAccountDate(iso: string | null | undefined) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("vi-VN", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 const CreateLicenseSchema = z.object({
   packageName: z.string().min(2, "Vui long chon package").max(80),
   keyMode: z.enum(["dynamic", "static"]),
@@ -36,11 +52,21 @@ const CreatePackageSchema = z.object({
 type CreatePackageForm = z.infer<typeof CreatePackageSchema>;
 
 type AccountPackageRow = {
+  id?: string;
   name: string;
   token: string;
   status: string;
+  createdAt?: string;
+  archivedAt?: string | null;
+  ownerEmail?: string;
   activationUiTitle?: string | null;
   activationUiSubtitle?: string | null;
+};
+
+type PackageListMeta = {
+  activeCount: number;
+  archivedCount: number;
+  totalCount: number;
 };
 
 export function LicensesManager({ initialData = [] }: { initialData?: License[] }) {
@@ -51,8 +77,13 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
   const [accountRole, setAccountRole] = useState("viewer");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountUsername, setAccountUsername] = useState("");
+  const [accountCreatedAt, setAccountCreatedAt] = useState<string | null>(null);
   const [currentPackage, setCurrentPackage] = useState("viewer");
   const [creatingPackage, setCreatingPackage] = useState(false);
+  const [allPackageRows, setAllPackageRows] = useState<AccountPackageRow[]>([]);
+  const [packageMeta, setPackageMeta] = useState<PackageListMeta | null>(null);
+  const [archivingName, setArchivingName] = useState<string | null>(null);
+  const [tokenRegeneratingName, setTokenRegeneratingName] = useState<string | null>(null);
   const [brandPkg, setBrandPkg] = useState("");
   const [brandTitle, setBrandTitle] = useState("");
   const [brandSub, setBrandSub] = useState("");
@@ -111,6 +142,11 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
     () => accountPackages.find((pkg) => pkg.name === selectedPackageName)?.token ?? "",
     [accountPackages, selectedPackageName]
   );
+  const canArchivePackages = accountRole === "owner" || accountRole === "admin";
+  const archivedPackageRows = useMemo(
+    () => allPackageRows.filter((p) => p.status === "archived"),
+    [allPackageRows]
+  );
   const packageForm = useForm<CreatePackageForm>({
     resolver: zodResolver(CreatePackageSchema),
     defaultValues: { packageName: "" },
@@ -124,16 +160,21 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
       currentPackage?: string;
       email?: string;
       username?: string;
+      accountCreatedAt?: string | null;
     };
     if (profile.role) setAccountRole(profile.role);
     if (profile.currentPackage) setCurrentPackage(profile.currentPackage);
     if (profile.email) setAccountEmail(profile.email);
     if (profile.username) setAccountUsername(profile.username);
+    setAccountCreatedAt(profile.accountCreatedAt ?? null);
 
     const res = await fetch("/api/packages", { method: "GET" });
     if (!res.ok) return;
-    const body = (await res.json()) as { data?: AccountPackageRow[] };
-    const packages = (body.data ?? []).filter((item) => item.status === "active");
+    const body = (await res.json()) as { data?: AccountPackageRow[]; meta?: PackageListMeta };
+    const rows = body.data ?? [];
+    setAllPackageRows(rows);
+    setPackageMeta(body.meta ?? null);
+    const packages = rows.filter((item) => item.status === "active");
     setAccountPackages(packages);
     if (packages.length > 0 && !form.getValues("packageName")) {
       form.setValue("packageName", packages[0].name, { shouldValidate: true });
@@ -185,6 +226,65 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
       await refreshAccountContext();
     } finally {
       setSavingBrand(false);
+    }
+  };
+
+  const archivePackage = async (name: string) => {
+    if (!canArchivePackages) {
+      toast.error("Chỉ owner hoặc admin được gỡ package.");
+      return;
+    }
+    const ok = window.confirm(
+      `Gỡ package "${name}"?\n\nBản ghi vẫn lưu trên server (trạng thái archived) để theo dõi — key cũ không tạo mới / không kích hoạt thêm với package này.`
+    );
+    if (!ok) return;
+    setArchivingName(name);
+    try {
+      const res = await fetch(`/api/packages?name=${encodeURIComponent(name)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+      if (!res.ok) {
+        toast.error(payload?.message ?? `Lỗi HTTP ${res.status}`);
+        return;
+      }
+      toast.success(payload?.message ?? "Đã gỡ package (soft delete).");
+      if (form.getValues("packageName") === name) {
+        form.setValue("packageName", "", { shouldValidate: false });
+      }
+      await refreshAccountContext();
+    } finally {
+      setArchivingName(null);
+    }
+  };
+
+  const regeneratePackageToken = async (name: string) => {
+    if (!canArchivePackages) {
+      toast.error("Chỉ owner hoặc admin được đổi package token.");
+      return;
+    }
+    const ok = window.confirm(
+      `Đổi package token cho "${name}"?\n\nToken cũ sẽ hết hiệu lực ngay (verify / activation-ui / tạo key). User phải dùng token mới trên client.`
+    );
+    if (!ok) return;
+    setTokenRegeneratingName(name);
+    try {
+      const res = await fetch("/api/packages", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name, regenerateToken: true }),
+      });
+      const payload = (await res.json().catch(() => null)) as { message?: string } | null;
+      if (!res.ok) {
+        toast.error(payload?.message ?? `Lỗi HTTP ${res.status}`);
+        return;
+      }
+      toast.success(payload?.message ?? "Đã đổi package token.");
+      await refreshAccountContext();
+    } finally {
+      setTokenRegeneratingName(null);
     }
   };
 
@@ -310,9 +410,9 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
         <Card>
           <h3 className="mb-3 text-base font-semibold">Plan privileges</h3>
           <div className="space-y-2 text-sm text-slate-300">
-            <p><span className="font-medium text-white">basic:</span> 1 device, core verify, standard queue support.</p>
-            <p><span className="font-medium text-white">pro:</span> 2-3 devices, priority verify, advanced tweak flags.</p>
-            <p><span className="font-medium text-white">premium:</span> up to 10 devices, instant unlock, premium support + custom flags.</p>
+            <p><span className="font-medium text-white">basic:</span> gói dashboard — tối đa 3 package token + 30 key / tháng (mặc định user mới).</p>
+            <p><span className="font-medium text-white">pro:</span> 10 package token + 200 key / tháng.</p>
+            <p><span className="font-medium text-white">premium:</span> 50 package token + 500 key / tháng. Owner không giới hạn.</p>
           </div>
         </Card>
         <Card>
@@ -328,9 +428,26 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
           <div className="space-y-2 text-sm text-slate-300">
             <p><span className="font-medium text-white">Email:</span> {accountEmail || "—"}</p>
             <p><span className="font-medium text-white">Username:</span> {accountUsername || "—"}</p>
+            <p>
+              <span className="font-medium text-white">Tài khoản tạo lúc:</span>{" "}
+              <span className="text-slate-200">{formatViAccountDate(accountCreatedAt)}</span>
+            </p>
             <p><span className="font-medium text-white">Role:</span> {accountRole}</p>
             <p><span className="font-medium text-white">Current package:</span> {currentPackage}</p>
-            <p><span className="font-medium text-white">Your packages:</span> {accountPackages.map((pkg) => pkg.name).join(", ") || "loading..."}</p>
+            <p>
+              <span className="font-medium text-white">Package đang hoạt động:</span>{" "}
+              {packageMeta?.activeCount ?? accountPackages.length} —{" "}
+              <span className="text-slate-400">
+                {accountPackages.map((pkg) => pkg.name).join(", ") || (packageMeta ? "—" : "loading...")}
+              </span>
+            </p>
+            <p>
+              <span className="font-medium text-white">Đã gỡ (vẫn lưu server):</span>{" "}
+              {packageMeta?.archivedCount ?? archivedPackageRows.length}
+            </p>
+            <p>
+              <span className="font-medium text-white">Tổng package (theo dõi):</span> {packageMeta?.totalCount ?? allPackageRows.length}
+            </p>
             <p><span className="font-medium text-white">Selected token:</span> {selectedPackageToken || "-"}</p>
             <p><span className="font-medium text-white">Scope:</span> License, Server, Tweaks, Logs, Settings</p>
             <p><span className="font-medium text-white">Status:</span> Active</p>
@@ -339,7 +456,97 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
       </div>
 
       <Card>
-        <h2 className="mb-3 text-base font-semibold">Package management</h2>
+        <h2 className="mb-2 text-base font-semibold">Package management</h2>
+        <p className="mb-3 text-sm text-slate-400">
+          Chỉ <span className="font-medium text-slate-200">owner</span> hoặc <span className="font-medium text-slate-200">admin</span> mới gỡ package hoặc{" "}
+          <span className="font-medium text-slate-200">đổi package token</span> cho user.
+          Gỡ = soft delete (dữ liệu vẫn trên server). Đổi token = token cũ vô hiệu, cấp <code className="text-cyan-300/90">PKG_…</code> mới — client bắt buộc cập nhật{" "}
+          <code className="text-cyan-300/90">packageToken</code>.
+        </p>
+        <div className="mb-4 flex flex-wrap gap-2">
+          <span className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 sm:text-sm">
+            Hoạt động: {packageMeta?.activeCount ?? accountPackages.length}
+          </span>
+          <span className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 sm:text-sm">
+            Đã gỡ: {packageMeta?.archivedCount ?? archivedPackageRows.length}
+          </span>
+          <span className="rounded-lg border border-slate-600/80 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300 sm:text-sm">
+            Tổng: {packageMeta?.totalCount ?? allPackageRows.length}
+          </span>
+        </div>
+        {(accountPackages.length > 0 || archivedPackageRows.length > 0) && (
+          <div className="mb-4 overflow-x-auto rounded-xl border border-slate-700/70">
+            <table className="w-full min-w-[36rem] text-left text-sm text-slate-300 sm:min-w-0">
+              <thead className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2.5 font-medium">Package</th>
+                  {(accountRole === "owner" || accountRole === "admin") && <th className="px-3 py-2.5 font-medium">Owner</th>}
+                  <th className="px-3 py-2.5 font-medium">Tạo</th>
+                  <th className="px-3 py-2.5 font-medium">Trạng thái</th>
+                  {canArchivePackages && <th className="px-3 py-2.5 font-medium text-right">Thao tác</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/90">
+                {accountPackages.map((pkg) => (
+                  <tr key={pkg.name} className="bg-slate-950/20">
+                    <td className="px-3 py-2.5 font-medium text-white">{pkg.name}</td>
+                    {(accountRole === "owner" || accountRole === "admin") && (
+                      <td className="max-w-[10rem] truncate px-3 py-2.5 text-xs text-slate-400" title={pkg.ownerEmail}>
+                        {pkg.ownerEmail ?? "—"}
+                      </td>
+                    )}
+                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">
+                      {formatViAccountDate(pkg.createdAt)}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-200">active</span>
+                    </td>
+                    {canArchivePackages && (
+                      <td className="px-3 py-2.5 text-right">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            disabled={tokenRegeneratingName === pkg.name || archivingName === pkg.name}
+                            onClick={() => void regeneratePackageToken(pkg.name)}
+                            className="touch-manipulation rounded-lg border border-amber-500/45 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {tokenRegeneratingName === pkg.name ? "…" : "Đổi token"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={archivingName === pkg.name || tokenRegeneratingName === pkg.name}
+                            onClick={() => void archivePackage(pkg.name)}
+                            className="touch-manipulation rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {archivingName === pkg.name ? "…" : "Gỡ"}
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+                {archivedPackageRows.map((pkg) => (
+                  <tr key={`arch-${pkg.name}`} className="bg-slate-900/40 opacity-90">
+                    <td className="px-3 py-2.5 font-medium text-slate-400 line-through decoration-slate-600">{pkg.name}</td>
+                    {(accountRole === "owner" || accountRole === "admin") && (
+                      <td className="max-w-[10rem] truncate px-3 py-2.5 text-xs text-slate-500" title={pkg.ownerEmail}>
+                        {pkg.ownerEmail ?? "—"}
+                      </td>
+                    )}
+                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">{formatViAccountDate(pkg.createdAt)}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="w-fit rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-200">archived</span>
+                        <span className="text-[10px] text-slate-500">Gỡ: {formatViAccountDate(pkg.archivedAt)}</span>
+                      </div>
+                    </td>
+                    {canArchivePackages && <td className="px-3 py-2.5 text-right text-xs text-slate-600">—</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
         <form className="grid grid-cols-1 gap-3 md:grid-cols-4" onSubmit={packageForm.handleSubmit(onCreatePackage)}>
           <div className="md:col-span-3">
             <Input placeholder="Tao package moi (vd: tuananh)" {...packageForm.register("packageName")} />

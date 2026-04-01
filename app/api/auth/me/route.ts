@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { accountPolicies, adminCredentials, userPackages } from "@/lib/mock-data";
+import { accountPolicies, adminCredentials, admins, userPackages } from "@/lib/mock-data";
 import { mapPolicyRowToApi } from "@/lib/account-policy";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -26,23 +26,38 @@ export async function GET() {
   const currentPackage = role === "owner" || role === "admin" ? "premium-admin" : role === "support" ? "support" : "viewer";
   let packages: string[] = [];
   let policy: ReturnType<typeof mapPolicyRowToApi> | null = null;
+  let accountCreatedAt: string | null = null;
 
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
-      const { data: userRow } = await supabase.from("users").select("id").eq("email", email.toLowerCase()).maybeSingle();
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("id, created_at")
+        .eq("email", email.toLowerCase())
+        .maybeSingle();
+      if (userRow?.created_at) {
+        accountCreatedAt = userRow.created_at as string;
+      }
       if (userRow?.id) {
         const { data: prof } = await supabase
           .from("admin_profiles")
-          .select("username")
+          .select("username, created_at")
           .eq("user_id", userRow.id)
           .maybeSingle();
         if (prof?.username && String(prof.username).trim().length > 0) {
           username = String(prof.username).trim();
         }
+        if (!accountCreatedAt && prof?.created_at) {
+          accountCreatedAt = prof.created_at as string;
+        }
       }
 
-      const query = supabase.from("user_packages").select("name").order("created_at", { ascending: false });
+      const query = supabase
+        .from("user_packages")
+        .select("name")
+        .eq("status", "active")
+        .order("created_at", { ascending: false });
       const { data } =
         role === "owner" || role === "admin"
           ? await query
@@ -74,10 +89,15 @@ export async function GET() {
   if (packages.length === 0) {
     const accessiblePackages =
       role === "owner" || role === "admin"
-        ? userPackages
-        : userPackages.filter((pkg) => pkg.ownerEmail === email.toLowerCase());
+        ? userPackages.filter((pkg) => pkg.status === "active")
+        : userPackages.filter((pkg) => pkg.ownerEmail === email.toLowerCase() && pkg.status === "active");
     packages = accessiblePackages.length > 0 ? accessiblePackages.map((pkg) => pkg.name) : [personalPackage];
   }
 
-  return NextResponse.json({ role, currentPackage, email, username, packages, policy });
+  if (!accountCreatedAt) {
+    const mockProfile = admins.find((a) => a.email.toLowerCase() === email.toLowerCase());
+    accountCreatedAt = mockProfile?.createdAt ?? null;
+  }
+
+  return NextResponse.json({ role, currentPackage, email, username, packages, policy, accountCreatedAt });
 }

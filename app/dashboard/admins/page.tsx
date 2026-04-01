@@ -81,13 +81,15 @@ export default function AdminsPage() {
     <div className="space-y-4">
       <Card>
         <h1 className="text-xl font-semibold">Admin Control Center</h1>
-        <p className="text-sm text-slate-400">Owner/Admin can manage viewer plan, key quota, package token quota, and access expiry.</p>
+        <p className="text-sm text-slate-400">
+          Gán gói basic (3 pkg · 30 key/tháng), pro (10 · 200), premium (50 · 500) hoặc chỉnh tay. Chỉ owner bỏ qua quota.
+        </p>
       </Card>
       <Card>
         <h2 className="mb-3 text-base font-semibold">Role Power</h2>
         <div className="grid gap-2 text-sm text-slate-300 md:grid-cols-2">
-          <p><span className="font-medium text-white">owner/admin:</span> full access, can assign viewer plan and monthly quotas.</p>
-          <p><span className="font-medium text-white">support/viewer:</span> restricted by policy and quota limits.</p>
+          <p><span className="font-medium text-white">owner:</span> full access, không tính quota package/key.</p>
+          <p><span className="font-medium text-white">admin/support/viewer:</span> theo <code className="text-cyan-300/90">assigned_plan</code> và quota đã gán.</p>
         </div>
       </Card>
       <Card className="overflow-x-auto">

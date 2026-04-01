@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { mapPolicyRowToApi, monthTag } from "@/lib/account-policy";
+import { mapPolicyRowToApi, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, adminCredentials, admins } from "@/lib/mock-data";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 import type { AccountPolicy, AdminStatus, LicensePlan, Role } from "@/types/domain";
@@ -147,11 +147,43 @@ export async function GET() {
         };
       });
 
+      /** Policy rows without matching `users` row — vẫn hiển thị để owner/admin quản lý, không bị “mất” khỏi danh sách. */
+      const { data: allPolicyRows } = await supabase.from("account_policies").select("*");
+      const listedEmailSet = new Set(listed.map((l) => l.email.toLowerCase()));
+      const policyOrphans = (allPolicyRows ?? []).filter(
+        (p) => !listedEmailSet.has(String(p.email).toLowerCase())
+      );
+      const orphanRows = policyOrphans.map((rawPol) => {
+        const em = String(rawPol.email).toLowerCase();
+        const policy = mapPolicyRowToApi(rawPol as Parameters<typeof mapPolicyRowToApi>[0]);
+        const roleFromPol = String(rawPol.role ?? "viewer") as Role;
+        return {
+          id: `policy_only_${em.replace(/[^a-z0-9]+/gi, "_")}`,
+          email: em,
+          username: em.split("@")[0],
+          role: roleFromPol,
+          status: "active" as AdminStatus,
+          createdAt: (rawPol.created_at as string) ?? new Date().toISOString(),
+          lastLoginAt: null as string | null,
+          hasLoginCredentials: false,
+          source: "supabase_policy_only" as const,
+          policy,
+          flags: {
+            protectedOwner: isProtectedOwnerEmail(em),
+            isSelf: em === requesterEmail,
+          },
+        };
+      });
+
+      const merged = [...listed, ...orphanRows].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+
       const mockOnly = buildMockUserList(requesterEmail).filter(
-        (m) => !listed.some((l) => l.email.toLowerCase() === m.email.toLowerCase())
+        (m) => !merged.some((l) => l.email.toLowerCase() === m.email.toLowerCase())
       );
       return NextResponse.json({
-        data: [...listed, ...mockOnly],
+        data: [...merged, ...mockOnly],
         meta: { canDeleteAccounts: isOwner(role) },
       });
     }
@@ -197,31 +229,80 @@ export async function PATCH(req: Request) {
     adm.status = data.status;
   }
 
-  let policy = accountPolicies.find((p) => p.email.toLowerCase() === email);
+  const mockPol = accountPolicies.find((p) => p.email.toLowerCase() === email);
   const resolvedRole = (
     typeof data.role !== "undefined"
       ? data.role
-      : ((cred?.role ?? adm?.role ?? policy?.role ?? "viewer") as Role)
+      : ((cred?.role ?? adm?.role ?? mockPol?.role ?? "viewer") as Role)
   ) as Role;
+
+  const currentMonth = monthTag();
+  type DbPol = {
+    assigned_plan: string;
+    monthly_package_token_limit: number;
+    monthly_key_limit: number;
+    package_tokens_used_this_month: number;
+    keys_used_this_month: number;
+    usage_month: string | null;
+    expires_at: string | null;
+  };
+  let dbPolicy: DbPol | null = null;
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const { data: row } = await supabase.from("account_policies").select("*").eq("email", email).maybeSingle();
+      if (row) dbPolicy = row as DbPol;
+    }
+  }
+  let assignedPlan: LicensePlan = (dbPolicy?.assigned_plan as LicensePlan) ?? mockPol?.assignedPlan ?? "basic";
+  let monthlyPackageTokenLimit = dbPolicy?.monthly_package_token_limit ?? mockPol?.monthlyPackageTokenLimit ?? 3;
+  let monthlyKeyLimit = dbPolicy?.monthly_key_limit ?? mockPol?.monthlyKeyLimit ?? 30;
+  let expiresAtOut: string | null =
+    typeof data.expiresAt !== "undefined" ? data.expiresAt : (dbPolicy?.expires_at ?? mockPol?.expiresAt ?? null);
+
+  if (typeof data.assignedPlan !== "undefined") {
+    assignedPlan = data.assignedPlan;
+    if (typeof data.monthlyPackageTokenLimit === "undefined" && typeof data.monthlyKeyLimit === "undefined") {
+      const q = quotaForAssignedPlan(assignedPlan);
+      monthlyPackageTokenLimit = q.monthlyPackageTokenLimit;
+      monthlyKeyLimit = q.monthlyKeyLimit;
+    }
+  }
+  if (typeof data.monthlyPackageTokenLimit !== "undefined") monthlyPackageTokenLimit = data.monthlyPackageTokenLimit;
+  if (typeof data.monthlyKeyLimit !== "undefined") monthlyKeyLimit = data.monthlyKeyLimit;
+
+  let pkgUsed = 0;
+  let keysUsed = 0;
+  if (dbPolicy) {
+    pkgUsed = dbPolicy.usage_month === currentMonth ? dbPolicy.package_tokens_used_this_month : 0;
+    keysUsed = dbPolicy.usage_month === currentMonth ? dbPolicy.keys_used_this_month : 0;
+  } else if (mockPol) {
+    pkgUsed = mockPol.packageTokensUsedThisMonth;
+    keysUsed = mockPol.keysUsedThisMonth;
+  }
+
+  let policy = mockPol;
   if (!policy) {
     policy = {
       email,
       role: resolvedRole,
-      assignedPlan: "basic",
-      monthlyPackageTokenLimit: 3,
-      monthlyKeyLimit: 30,
-      packageTokensUsedThisMonth: 0,
-      keysUsedThisMonth: 0,
-      expiresAt: null,
+      assignedPlan,
+      monthlyPackageTokenLimit,
+      monthlyKeyLimit,
+      packageTokensUsedThisMonth: pkgUsed,
+      keysUsedThisMonth: keysUsed,
+      expiresAt: expiresAtOut,
       updatedAt: new Date().toISOString(),
     };
     accountPolicies.push(policy);
   }
   policy.role = resolvedRole;
-  if (typeof data.assignedPlan !== "undefined") policy.assignedPlan = data.assignedPlan;
-  if (typeof data.monthlyPackageTokenLimit !== "undefined") policy.monthlyPackageTokenLimit = data.monthlyPackageTokenLimit;
-  if (typeof data.monthlyKeyLimit !== "undefined") policy.monthlyKeyLimit = data.monthlyKeyLimit;
-  if (typeof data.expiresAt !== "undefined") policy.expiresAt = data.expiresAt;
+  policy.assignedPlan = assignedPlan;
+  policy.monthlyPackageTokenLimit = monthlyPackageTokenLimit;
+  policy.monthlyKeyLimit = monthlyKeyLimit;
+  policy.packageTokensUsedThisMonth = pkgUsed;
+  policy.keysUsedThisMonth = keysUsed;
+  policy.expiresAt = expiresAtOut;
   policy.updatedAt = new Date().toISOString();
 
   if (isSupabaseEnabled()) {
@@ -238,22 +319,17 @@ export async function PATCH(req: Request) {
         }
       }
 
-      const { data: existing } = await supabase.from("account_policies").select("*").eq("email", email).maybeSingle();
-      const currentMonth = monthTag();
-      const pkgUsed = existing && existing.usage_month === currentMonth ? existing.package_tokens_used_this_month : 0;
-      const keysUsed = existing && existing.usage_month === currentMonth ? existing.keys_used_this_month : 0;
-
       const { error: polErr } = await supabase.from("account_policies").upsert(
         {
           email,
           role: resolvedRole,
-          assigned_plan: policy.assignedPlan as LicensePlan,
-          monthly_package_token_limit: policy.monthlyPackageTokenLimit,
-          monthly_key_limit: policy.monthlyKeyLimit,
+          assigned_plan: assignedPlan,
+          monthly_package_token_limit: monthlyPackageTokenLimit,
+          monthly_key_limit: monthlyKeyLimit,
           package_tokens_used_this_month: pkgUsed,
           keys_used_this_month: keysUsed,
           usage_month: currentMonth,
-          expires_at: policy.expiresAt,
+          expires_at: expiresAtOut,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "email" }

@@ -100,6 +100,7 @@ alter table licenses add column if not exists owner_email text;
 alter table user_packages add column if not exists token text;
 alter table user_packages add column if not exists activation_ui_title text;
 alter table user_packages add column if not exists activation_ui_subtitle text;
+alter table user_packages add column if not exists archived_at timestamptz;
 
 create table if not exists license_logs (
   id uuid primary key default gen_random_uuid(),

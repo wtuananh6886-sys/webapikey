@@ -25,23 +25,26 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-5">
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((it) => (
           <Card key={it.label}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs text-slate-400">{it.label}</p>
-                <p className="mt-2 text-2xl font-semibold">{it.value}</p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium text-slate-400">{it.label}</p>
+                <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-white sm:text-3xl">{it.value}</p>
               </div>
-              <it.icon className="text-blue-300" size={20} />
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-blue-500/15 text-blue-300 ring-1 ring-blue-400/20">
+                <it.icon size={22} aria-hidden />
+              </div>
             </div>
           </Card>
         ))}
       </section>
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
-          <p className="mb-3 text-sm font-medium">License activations trend</p>
-          <div className="h-64">
+          <p className="mb-1 text-sm font-semibold text-slate-200">License activations trend</p>
+          <p className="mb-4 text-xs text-slate-500">Demo chart — kết nối dữ liệu thật khi cần</p>
+          <div className="h-[min(16rem,50vw)] min-h-[14rem] sm:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#243249" />

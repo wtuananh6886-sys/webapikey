@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
-import { defaultLimitsForRole, ensureAccountPolicyRow, monthTag } from "@/lib/account-policy";
+import { ensureAccountPolicyRow, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, userPackages } from "@/lib/mock-data";
 import type { AccountPolicy, PackageStatus, Role, UserPackage } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
@@ -14,6 +14,8 @@ const PatchPackageSchema = z.object({
   name: z.string().min(2).max(80),
   activationUiTitle: z.union([z.string().max(80), z.null()]).optional(),
   activationUiSubtitle: z.union([z.string().max(160), z.null()]).optional(),
+  /** Owner/admin only: token cũ hết hiệu lực, cấp PKG_ mới (client phải cập nhật packageToken). */
+  regenerateToken: z.literal(true).optional(),
 });
 
 function generatePackageToken() {
@@ -79,13 +81,13 @@ async function consumePackageTokenQuota(email: string, role: Role) {
   }
   let policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
   if (!policy) {
-    const defaults = defaultLimitsForRole(role);
+    const q = quotaForAssignedPlan("basic");
     const createdPolicy: AccountPolicy = {
       email: email.toLowerCase(),
       role,
-      assignedPlan: defaults.assignedPlan,
-      monthlyPackageTokenLimit: defaults.monthlyPackageTokenLimit,
-      monthlyKeyLimit: defaults.monthlyKeyLimit,
+      assignedPlan: "basic",
+      monthlyPackageTokenLimit: q.monthlyPackageTokenLimit,
+      monthlyKeyLimit: q.monthlyKeyLimit,
       packageTokensUsedThisMonth: 0,
       keysUsedThisMonth: 0,
       expiresAt: null,
@@ -137,17 +139,28 @@ export async function GET() {
         status: row.status,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        archivedAt: row.archived_at ?? null,
         activationUiTitle: row.activation_ui_title ?? null,
         activationUiSubtitle: row.activation_ui_subtitle ?? null,
       }));
-      return NextResponse.json({ data: mapped });
+      const activeCount = mapped.filter((p) => p.status === "active").length;
+      const archivedCount = mapped.filter((p) => p.status === "archived").length;
+      return NextResponse.json({
+        data: mapped,
+        meta: { activeCount, archivedCount, totalCount: mapped.length },
+      });
     }
   }
   const rows =
     role === "owner" || role === "admin"
       ? userPackages
       : userPackages.filter((pkg) => pkg.ownerEmail === email);
-  return NextResponse.json({ data: rows });
+  const activeCount = rows.filter((p) => p.status === "active").length;
+  const archivedCount = rows.filter((p) => p.status === "archived").length;
+  return NextResponse.json({
+    data: rows,
+    meta: { activeCount, archivedCount, totalCount: rows.length },
+  });
 }
 
 export async function POST(req: Request) {
@@ -180,7 +193,7 @@ export async function POST(req: Request) {
     createdAt: now,
     updatedAt: now,
   };
-  if (!(role === "owner" || role === "admin")) {
+  if (role !== "owner") {
     const quota = await consumePackageTokenQuota(email, parseRole(role));
     if (!quota.ok) {
       return NextResponse.json({ message: quota.message }, { status: quota.status });
@@ -254,11 +267,15 @@ export async function PATCH(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ message: "Invalid payload", errors: parsed.error.flatten() }, { status: 400 });
   }
-  const { name, activationUiTitle, activationUiSubtitle } = parsed.data;
+  const { name, activationUiTitle, activationUiSubtitle, regenerateToken } = parsed.data;
   const normalized = normalizePackageName(name);
   if (!normalized) return NextResponse.json({ message: "Invalid package name" }, { status: 400 });
 
   const elevated = role === "owner" || role === "admin";
+
+  if (regenerateToken === true && !elevated) {
+    return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được đổi package token" }, { status: 403 });
+  }
 
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
@@ -266,12 +283,86 @@ export async function PATCH(req: Request) {
       const { data: row, error: fetchErr } = await supabase.from("user_packages").select("*").eq("name", normalized).maybeSingle();
       if (fetchErr) return NextResponse.json({ message: fetchErr.message }, { status: 500 });
       if (!row) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+      if (row.status === "archived") {
+        return NextResponse.json({ message: "Package is archived — restore not supported via API" }, { status: 400 });
+      }
       if (!elevated && String(row.owner_email ?? "").toLowerCase() !== email.toLowerCase()) {
         return NextResponse.json({ message: "Forbidden" }, { status: 403 });
       }
-      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const now = new Date().toISOString();
+      const updates: Record<string, unknown> = { updated_at: now };
       if (activationUiTitle !== undefined) updates.activation_ui_title = activationUiTitle;
       if (activationUiSubtitle !== undefined) updates.activation_ui_subtitle = activationUiSubtitle;
+
+      if (regenerateToken === true) {
+        let updatedRow: Record<string, unknown> | null = null;
+        let lastErr: { message: string; code?: string } | null = null;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const token = generatePackageToken();
+          const res = await supabase
+            .from("user_packages")
+            .update({ ...updates, token })
+            .eq("name", normalized)
+            .select("*")
+            .single();
+          if (!res.error && res.data) {
+            updatedRow = res.data as Record<string, unknown>;
+            break;
+          }
+          lastErr = res.error ?? { message: "update_failed" };
+          const code = (res.error as { code?: string })?.code;
+          const msg = res.error?.message ?? "";
+          if (code === "23505" && (msg.includes("token") || msg.includes("user_packages_token"))) {
+            continue;
+          }
+          return NextResponse.json({ message: res.error?.message ?? "Update failed" }, { status: 500 });
+        }
+        if (!updatedRow) {
+          return NextResponse.json({ message: lastErr?.message ?? "Could not assign unique token" }, { status: 500 });
+        }
+        const { data: actor } = await supabase.from("users").select("id").eq("email", email.toLowerCase()).maybeSingle();
+        const { error: logErr } = await supabase.from("activity_logs").insert({
+          actor_id: actor?.id ?? null,
+          actor_name: email,
+          action: "package_token_regenerated",
+          target_type: "package",
+          target_id: String(updatedRow.id),
+          target_name: String(updatedRow.name),
+          severity: "warning",
+          metadata: { owner_email: updatedRow.owner_email, by_role: role },
+        });
+        if (logErr) {
+          console.warn("[packages PATCH] activity_logs insert:", logErr.message);
+        }
+        const ur = updatedRow as {
+          id: string;
+          name: string;
+          token: string;
+          owner_email: string;
+          status: string;
+          created_at: string;
+          updated_at: string;
+          activation_ui_title?: string | null;
+          activation_ui_subtitle?: string | null;
+          archived_at?: string | null;
+        };
+        return NextResponse.json({
+          message: "Đã đổi package token. Token cũ không còn hiệu lực — cập nhật client / user.",
+          data: {
+            id: ur.id,
+            name: ur.name,
+            token: ur.token,
+            ownerEmail: ur.owner_email,
+            status: ur.status as PackageStatus,
+            createdAt: ur.created_at,
+            updatedAt: ur.updated_at,
+            activationUiTitle: ur.activation_ui_title ?? null,
+            activationUiSubtitle: ur.activation_ui_subtitle ?? null,
+            archivedAt: ur.archived_at ?? null,
+          } satisfies UserPackage,
+        });
+      }
+
       const { data: updated, error: upErr } = await supabase
         .from("user_packages")
         .update(updates)
@@ -290,6 +381,7 @@ export async function PATCH(req: Request) {
           updatedAt: updated.updated_at,
           activationUiTitle: updated.activation_ui_title ?? null,
           activationUiSubtitle: updated.activation_ui_subtitle ?? null,
+          archivedAt: updated.archived_at ?? null,
         } satisfies UserPackage,
       });
     }
@@ -297,12 +389,123 @@ export async function PATCH(req: Request) {
 
   const pkg = userPackages.find((p) => p.name === normalized);
   if (!pkg) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+  if (pkg.status === "archived") {
+    return NextResponse.json({ message: "Package is archived — restore not supported via API" }, { status: 400 });
+  }
   if (!elevated && pkg.ownerEmail.toLowerCase() !== email.toLowerCase()) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+  if (regenerateToken === true) {
+    pkg.token = generatePackageToken();
   }
   if (activationUiTitle !== undefined) pkg.activationUiTitle = activationUiTitle ?? undefined;
   if (activationUiSubtitle !== undefined) pkg.activationUiSubtitle = activationUiSubtitle ?? undefined;
   pkg.updatedAt = new Date().toISOString();
-  return NextResponse.json({ data: pkg });
+  return NextResponse.json({
+    ...(regenerateToken === true
+      ? { message: "Đã đổi package token. Token cũ không còn hiệu lực — cập nhật client / user." }
+      : {}),
+    data: pkg,
+  });
+}
+
+/**
+ * Soft-delete package: chỉ owner hoặc admin. Bản ghi vẫn trên DB (status archived + archived_at) để theo dõi / audit.
+ */
+export async function DELETE(req: Request) {
+  const { email, role } = await getAuthContext();
+  if (role !== "owner" && role !== "admin") {
+    return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được gỡ package" }, { status: 403 });
+  }
+
+  const url = new URL(req.url);
+  const rawName = url.searchParams.get("name")?.trim() ?? "";
+  const normalized = normalizePackageName(rawName);
+  if (!normalized) {
+    return NextResponse.json({ message: "Thiếu hoặc sai tên package (query ?name=)" }, { status: 400 });
+  }
+
+  const now = new Date().toISOString();
+
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const { data: row, error: fetchErr } = await supabase.from("user_packages").select("*").eq("name", normalized).maybeSingle();
+      if (fetchErr) return NextResponse.json({ message: fetchErr.message }, { status: 500 });
+      if (!row) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+      if (row.status === "archived") {
+        return NextResponse.json({
+          message: "Package đã được gỡ trước đó (vẫn lưu trên server)",
+          data: {
+            id: row.id,
+            name: row.name,
+            token: row.token,
+            ownerEmail: row.owner_email,
+            status: "archived" as PackageStatus,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            archivedAt: row.archived_at ?? now,
+          } satisfies UserPackage,
+        });
+      }
+
+      const { data: updated, error: upErr } = await supabase
+        .from("user_packages")
+        .update({
+          status: "archived",
+          archived_at: now,
+          updated_at: now,
+        })
+        .eq("name", normalized)
+        .select("*")
+        .single();
+      if (upErr) return NextResponse.json({ message: upErr.message }, { status: 500 });
+
+      const { data: actor } = await supabase.from("users").select("id").eq("email", email.toLowerCase()).maybeSingle();
+      const { error: logErr } = await supabase.from("activity_logs").insert({
+        actor_id: actor?.id ?? null,
+        actor_name: email,
+        action: "package_archived",
+        target_type: "package",
+        target_id: String(updated.id),
+        target_name: updated.name,
+        severity: "warning",
+        metadata: { owner_email: updated.owner_email, by_role: role },
+      });
+      if (logErr) {
+        console.warn("[packages DELETE] activity_logs insert:", logErr.message);
+      }
+
+      return NextResponse.json({
+        message: "Đã gỡ package (soft delete). Dữ liệu key / lịch sử vẫn trên server.",
+        data: {
+          id: updated.id,
+          name: updated.name,
+          token: updated.token,
+          ownerEmail: updated.owner_email,
+          status: updated.status as PackageStatus,
+          createdAt: updated.created_at,
+          updatedAt: updated.updated_at,
+          archivedAt: updated.archived_at ?? now,
+        } satisfies UserPackage,
+      });
+    }
+  }
+
+  const pkg = userPackages.find((p) => p.name === normalized);
+  if (!pkg) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+  if (pkg.status === "archived") {
+    return NextResponse.json({
+      message: "Package đã được gỡ trước đó (vẫn lưu trên server)",
+      data: pkg,
+    });
+  }
+  pkg.status = "archived";
+  pkg.archivedAt = now;
+  pkg.updatedAt = now;
+  return NextResponse.json({
+    message: "Đã gỡ package (soft delete). Dữ liệu key / lịch sử vẫn trên server.",
+    data: pkg,
+  });
 }
 

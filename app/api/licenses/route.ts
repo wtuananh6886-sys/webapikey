@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { defaultLimitsForRole, ensureAccountPolicyRow, monthTag } from "@/lib/account-policy";
+import { ensureAccountPolicyRow, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
 import { getWaSession, isLicenseElevatedRole } from "@/lib/session-cookies";
 import type { AccountPolicy, License, Role } from "@/types/domain";
@@ -46,7 +46,7 @@ const CreateLicenseSchema = z.object({
 
 const UpdateActionSchema = z.object({
   id: z.string(),
-  action: z.enum(["ban", "revoke", "extend"]),
+  action: z.enum(["ban", "revoke", "extend", "unban", "unrevoke", "activate", "deactivate"]),
   days: z.number().int().min(1).max(365).optional(),
 });
 
@@ -128,13 +128,13 @@ async function consumeKeyQuota(
   }
   let policy = accountPolicies.find((it) => it.email.toLowerCase() === email.toLowerCase());
   if (!policy) {
-    const defaults = defaultLimitsForRole(role);
+    const q = quotaForAssignedPlan("basic");
     const createdPolicy: AccountPolicy = {
       email: email.toLowerCase(),
       role,
-      assignedPlan: defaults.assignedPlan,
-      monthlyPackageTokenLimit: defaults.monthlyPackageTokenLimit,
-      monthlyKeyLimit: defaults.monthlyKeyLimit,
+      assignedPlan: "basic",
+      monthlyPackageTokenLimit: q.monthlyPackageTokenLimit,
+      monthlyKeyLimit: q.monthlyKeyLimit,
       packageTokensUsedThisMonth: 0,
       keysUsedThisMonth: 0,
       expiresAt: null,
@@ -304,7 +304,7 @@ export async function POST(req: Request) {
     }
   }
   const durationDays = data.durationDays ?? 30;
-  if (!elevated) {
+  if (role !== "owner") {
     const quota = await consumeKeyQuota(email, role, data.plan);
     if (!quota.ok) {
       return NextResponse.json({ message: quota.message }, { status: quota.status });
@@ -397,19 +397,50 @@ export async function PATCH(req: Request) {
         return NextResponse.json({ message: "Forbidden" }, { status: 403 });
       }
 
-      let nextStatus = current.status;
+      let nextStatus = current.status as string;
       let nextExpires = current.expires_at;
       if (action === "ban") nextStatus = "banned";
       if (action === "revoke") nextStatus = "revoked";
+      if (action === "unban") {
+        if (current.status !== "banned") {
+          return NextResponse.json({ message: "Key không ở trạng thái banned — không thể unban" }, { status: 400 });
+        }
+        nextStatus = "active";
+      }
+      if (action === "unrevoke") {
+        if (current.status !== "revoked") {
+          return NextResponse.json({ message: "Key không ở trạng thái revoked — không thể gỡ revoke" }, { status: 400 });
+        }
+        nextStatus = "active";
+      }
+      if (action === "activate") {
+        if (current.status !== "inactive") {
+          return NextResponse.json({ message: "Chỉ key inactive mới được kích hoạt lại (activate)" }, { status: 400 });
+        }
+        nextStatus = "active";
+      }
+      if (action === "deactivate") {
+        if (current.status !== "active") {
+          return NextResponse.json({ message: "Chỉ key active mới được tạm dừng (deactivate)" }, { status: 400 });
+        }
+        nextStatus = "inactive";
+      }
       if (action === "extend") {
-        const base = new Date(current.expires_at || new Date());
-        base.setDate(base.getDate() + (days ?? 7));
+        const addDays = days ?? 7;
+        const nowMs = Date.now();
+        const expMs = current.expires_at ? new Date(current.expires_at).getTime() : nowMs;
+        const base = new Date(Math.max(expMs, nowMs));
+        base.setDate(base.getDate() + addDays);
         nextExpires = base.toISOString();
+        if (current.status === "expired" || current.status === "inactive") {
+          nextStatus = "active";
+        }
       }
 
+      const nowIso = new Date().toISOString();
       const { data: updated, error: updateErr } = await supabase
         .from("licenses")
-        .update({ status: nextStatus, expires_at: nextExpires })
+        .update({ status: nextStatus, expires_at: nextExpires, updated_at: nowIso })
         .eq("id", id)
         .select("*")
         .single();
@@ -419,7 +450,10 @@ export async function PATCH(req: Request) {
         licenseId: id,
         action,
         ip,
-        metadata: action === "extend" ? { days: days ?? 7 } : {},
+        metadata:
+          action === "extend"
+            ? { days: days ?? 7, previous_status: current.status }
+            : { previous_status: current.status },
       });
 
       return NextResponse.json({ data: mapSupabaseRowToLicense(updated as Record<string, unknown>) });
@@ -437,10 +471,36 @@ export async function PATCH(req: Request) {
     license.status = "banned";
   } else if (action === "revoke") {
     license.status = "revoked";
+  } else if (action === "unban") {
+    if (license.status !== "banned") {
+      return NextResponse.json({ message: "Key không ở trạng thái banned — không thể unban" }, { status: 400 });
+    }
+    license.status = "active";
+  } else if (action === "unrevoke") {
+    if (license.status !== "revoked") {
+      return NextResponse.json({ message: "Key không ở trạng thái revoked — không thể gỡ revoke" }, { status: 400 });
+    }
+    license.status = "active";
+  } else if (action === "activate") {
+    if (license.status !== "inactive") {
+      return NextResponse.json({ message: "Chỉ key inactive mới được kích hoạt lại (activate)" }, { status: 400 });
+    }
+    license.status = "active";
+  } else if (action === "deactivate") {
+    if (license.status !== "active") {
+      return NextResponse.json({ message: "Chỉ key active mới được tạm dừng (deactivate)" }, { status: 400 });
+    }
+    license.status = "inactive";
   } else if (action === "extend") {
-    const base = new Date(license.expiresAt || new Date());
-    base.setDate(base.getDate() + (days ?? 7));
+    const addDays = days ?? 7;
+    const nowMs = Date.now();
+    const expMs = license.expiresAt ? new Date(license.expiresAt).getTime() : nowMs;
+    const base = new Date(Math.max(expMs, nowMs));
+    base.setDate(base.getDate() + addDays);
     license.expiresAt = base.toISOString();
+    if (license.status === "expired" || license.status === "inactive") {
+      license.status = "active";
+    }
   }
   licenseUsageLogs.push({
     id: `lug_${Date.now()}`,

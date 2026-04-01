@@ -16,6 +16,7 @@ export async function getActivationBrandingByPackageToken(packageToken: string):
         .from("user_packages")
         .select("activation_ui_title, activation_ui_subtitle")
         .eq("token", tok)
+        .eq("status", "active")
         .maybeSingle();
       if (error || !data) return null;
       const title = typeof data.activation_ui_title === "string" && data.activation_ui_title.trim().length > 0
@@ -29,7 +30,7 @@ export async function getActivationBrandingByPackageToken(packageToken: string):
     }
   }
 
-  const pkg = userPackages.find((p) => p.token === tok);
+  const pkg = userPackages.find((p) => p.token === tok && p.status === "active");
   if (!pkg) return null;
   const title = pkg.activationUiTitle?.trim() || DEFAULT_TITLE;
   const sub = pkg.activationUiSubtitle?.trim() || null;
@@ -47,6 +48,7 @@ export async function getActivationBrandingByPackageName(packageName: string): P
         .from("user_packages")
         .select("activation_ui_title, activation_ui_subtitle")
         .eq("name", name)
+        .eq("status", "active")
         .maybeSingle();
       if (data) {
         const title =
@@ -62,7 +64,7 @@ export async function getActivationBrandingByPackageName(packageName: string): P
     }
   }
 
-  const pkg = userPackages.find((p) => p.name === name);
+  const pkg = userPackages.find((p) => p.name === name && p.status === "active");
   if (!pkg) return { uiTitle: DEFAULT_TITLE, uiSubtitle: null };
   return {
     uiTitle: pkg.activationUiTitle?.trim() || DEFAULT_TITLE,
