@@ -10,8 +10,13 @@ static NSString * const kAOVLicenseExpiryKey = @"aov.license.expiry";
 static NSString * const kAOVLicensePackageKey = @"aov.license.package";
 static NSString * const kAOVDeviceIdKey = @"aov.device.id";
 static NSString * const kAOVPackageTokenKey = @"aov.package.token";
+/** Server JWT from POST /api/licenses/verify when LICENSE_SESSION_SECRET is set — refreshed via /api/licenses/session */
+static NSString * const kAOVSessionTokenKey = @"aov.license.session.token";
+static NSString * const kAOVCachedUITitleKey = @"aov.activation.ui.title";
+static NSString * const kAOVCachedUISubtitleKey = @"aov.activation.ui.subtitle";
+static const NSInteger kAOVActivationKeyFieldTag = 772001;
 
-@interface AOVLicenseGateManager ()
+@interface AOVLicenseGateManager () <UITextFieldDelegate, UIGestureRecognizerDelegate>
 @property (nonatomic, assign) BOOL verified;
 @property (nonatomic, assign) BOOL promptVisible;
 @property (nonatomic, assign) BOOL checking;
@@ -19,6 +24,14 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
 @property (nonatomic, strong) UIView *toastView;
 @property (nonatomic, assign) BOOL autoVerifyInProgress;
 @property (nonatomic, copy) NSString *pendingPromptMessage;
+@property (nonatomic, strong) NSTimer *sessionRefreshTimer;
+@property (nonatomic, assign) BOOL sessionRefreshInFlight;
+@property (nonatomic, strong) UIView *activationOverlayView;
+@property (nonatomic, weak) UITextField *activationKeyField;
+@property (nonatomic, weak) UIView *activationCardView;
+@property (nonatomic, weak) UILabel *activationTitleLabel;
+@property (nonatomic, weak) UILabel *activationSubtitleLabel;
+@property (nonatomic, assign) BOOL activationKeyboardObserversActive;
 @end
 
 @implementation AOVLicenseGateManager
@@ -97,13 +110,25 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
                 [ud setObject:plan forKey:kAOVLicensePlanKey];
                 [ud setObject:expiry forKey:kAOVLicenseExpiryKey];
                 [ud setObject:pkg forKey:kAOVLicensePackageKey];
+                id uiTitle = [json objectForKey:NSSENCRYPT("uiTitle")];
+                if ([uiTitle isKindOfClass:[NSString class]] && [(NSString *)uiTitle length] > 0) {
+                    [ud setObject:uiTitle forKey:kAOVCachedUITitleKey];
+                }
+                id uiSub = [json objectForKey:NSSENCRYPT("uiSubtitle")];
+                if ([uiSub isKindOfClass:[NSString class]] && [(NSString *)uiSub length] > 0) {
+                    [ud setObject:uiSub forKey:kAOVCachedUISubtitleKey];
+                } else {
+                    [ud removeObjectForKey:kAOVCachedUISubtitleKey];
+                }
                 [ud synchronize];
+                [selfRef saveSessionTokenFromVerifyResponse:json];
                 [selfRef showVerifiedToastWithPlan:plan expiry:expiry];
                 return;
             }
 
             selfRef.checking = NO;
             selfRef.autoVerifyInProgress = NO;
+            [selfRef clearSessionToken];
             NSString *reason = nil;
             NSString *messageText = nil;
             if ([json isKindOfClass:[NSDictionary class]]) {
@@ -132,6 +157,113 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
     [task resume];
 }
 
+- (NSString *)verifyAPIHost {
+    return NSSENCRYPT("https://webapikey-sable.vercel.app");
+}
+
+- (void)clearSessionToken {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud removeObjectForKey:kAOVSessionTokenKey];
+    [ud synchronize];
+    [self.sessionRefreshTimer invalidate];
+    self.sessionRefreshTimer = nil;
+}
+
+- (void)saveSessionTokenFromVerifyResponse:(NSDictionary *)json {
+    if (![json isKindOfClass:[NSDictionary class]]) return;
+    id tok = [json objectForKey:NSSENCRYPT("sessionToken")];
+    if (![tok isKindOfClass:[NSString class]] || [(NSString *)tok length] < 16) {
+        [self clearSessionToken];
+        return;
+    }
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setObject:tok forKey:kAOVSessionTokenKey];
+    [ud synchronize];
+    [self scheduleSessionRefreshTimerIfNeeded];
+}
+
+- (void)scheduleSessionRefreshTimerIfNeeded {
+    [self.sessionRefreshTimer invalidate];
+    self.sessionRefreshTimer = nil;
+    NSString *tok = [[NSUserDefaults standardUserDefaults] stringForKey:kAOVSessionTokenKey];
+    if (tok.length == 0) return;
+    __weak AOVLicenseGateManager *weakSelf = self;
+    self.sessionRefreshTimer = [NSTimer scheduledTimerWithTimeInterval:900.0 repeats:YES block:^(NSTimer * _Nonnull t) {
+        [weakSelf refreshSessionSilently];
+    }];
+}
+
+- (void)invalidateLicenseAndReprompt:(NSString *)reason {
+    self.verified = NO;
+    self.checking = NO;
+    self.autoVerifyInProgress = NO;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    [ud setBool:NO forKey:kAOVLicenseVerifiedKey];
+    [ud synchronize];
+    [self clearSessionToken];
+    if (reason.length > 0) {
+        [self showErrorToastWithReason:reason];
+    }
+    [self presentPromptIfNeededWithMessage:reason.length > 0 ? reason : @"Session expired. Enter key again."];
+}
+
+- (void)refreshSessionSilently {
+    if (!self.verified || self.sessionRefreshInFlight) return;
+    NSString *tok = [[NSUserDefaults standardUserDefaults] stringForKey:kAOVSessionTokenKey];
+    if (tok.length == 0) return;
+
+    NSString *host = [self verifyAPIHost];
+    NSURL *url = [NSURL URLWithString:[host stringByAppendingString:NSSENCRYPT("/api/licenses/session")]];
+    if (!url) return;
+
+    self.sessionRefreshInFlight = YES;
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.HTTPMethod = NSSENCRYPT("POST");
+    req.timeoutInterval = 12.0;
+    [req setValue:NSSENCRYPT("application/json") forHTTPHeaderField:NSSENCRYPT("Content-Type")];
+    [req setValue:[NSString stringWithFormat:NSSENCRYPT("Bearer %@"), tok] forHTTPHeaderField:NSSENCRYPT("Authorization")];
+    NSDictionary *emptyBody = @{};
+    NSData *body = [NSJSONSerialization dataWithJSONObject:emptyBody options:0 error:nil];
+    req.HTTPBody = body ?: [NSData data];
+
+    __weak AOVLicenseGateManager *weakSelf = self;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AOVLicenseGateManager *selfRef = weakSelf;
+            if (!selfRef) return;
+            selfRef.sessionRefreshInFlight = NO;
+
+            if (error) return;
+
+            NSInteger code = 0;
+            if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                code = [(NSHTTPURLResponse *)response statusCode];
+            }
+            if (code == 503) {
+                return;
+            }
+            NSDictionary *json = nil;
+            if (data.length > 0) {
+                json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            }
+            BOOL ok = [[json objectForKey:NSSENCRYPT("ok")] boolValue];
+
+            if (code == 401 || code == 403 || !ok) {
+                [selfRef invalidateLicenseAndReprompt:NSSENCRYPT("License session expired or revoked")];
+                return;
+            }
+
+            if ([json isKindOfClass:[NSDictionary class]]) {
+                id newTok = [json objectForKey:NSSENCRYPT("sessionToken")];
+                if ([newTok isKindOfClass:[NSString class]] && [(NSString *)newTok length] >= 16) {
+                    [[NSUserDefaults standardUserDefaults] setObject:newTok forKey:kAOVSessionTokenKey];
+                    [[NSUserDefaults standardUserDefaults] synchronize];
+                }
+            }
+        });
+    }] resume];
+}
+
 + (instancetype)shared {
     static AOVLicenseGateManager *inst;
     static dispatch_once_t onceToken;
@@ -151,6 +283,7 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
     _bootstrapped = NO;
     _autoVerifyInProgress = NO;
     _pendingPromptMessage = nil;
+    _sessionRefreshInFlight = NO;
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(onAppBecameActive)
                                                  name:UIApplicationDidBecomeActiveNotification
@@ -208,6 +341,8 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
 - (void)onAppBecameActive {
     if (!self.verified) {
         [self tryAutoVerifyOrPresent:nil];
+    } else {
+        [self refreshSessionSilently];
     }
 }
 
@@ -361,62 +496,358 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
     }];
 }
 
+- (UIWindow *)activationHostWindow {
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (!w.isHidden && w.windowLevel <= UIWindowLevelNormal + 1) {
+            return w;
+        }
+    }
+    return [UIApplication sharedApplication].keyWindow;
+}
+
+- (void)dismissActivationOverlayAnimated:(BOOL)animated {
+    UIView *overlay = self.activationOverlayView;
+    if (!overlay) return;
+    [overlay endEditing:YES];
+    if (self.activationKeyboardObserversActive) {
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillShowNotification object:nil];
+        [[NSNotificationCenter defaultCenter] removeObserver:self name:UIKeyboardWillHideNotification object:nil];
+        self.activationKeyboardObserversActive = NO;
+    }
+    self.activationKeyField = nil;
+    self.activationCardView = nil;
+    self.activationTitleLabel = nil;
+    self.activationSubtitleLabel = nil;
+    void (^cleanup)(void) = ^{
+        [overlay removeFromSuperview];
+        self.activationOverlayView = nil;
+    };
+    if (animated) {
+        [UIView animateWithDuration:0.2 delay:0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            overlay.alpha = 0.0;
+        } completion:^(BOOL finished) {
+            cleanup();
+        }];
+    } else {
+        cleanup();
+    }
+}
+
+- (void)activationKeyboardWillShow:(NSNotification *)note {
+    UIView *card = self.activationCardView;
+    UIWindow *win = card.window;
+    if (!card || !win) return;
+    [card.layer removeAllAnimations];
+    card.transform = CGAffineTransformIdentity;
+    CGRect kb = [note.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    kb = [win convertRect:kb fromWindow:nil];
+    CGRect cardFrameInWin = [card convertRect:card.bounds toView:win];
+    CGFloat pad = 10.0;
+    CGFloat overlap = CGRectGetMaxY(cardFrameInWin) - (CGRectGetMinY(kb) - pad);
+    if (overlap <= 0) return;
+    NSTimeInterval dur = [note.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    if (dur < 0.01) dur = 0.25;
+    [UIView animateWithDuration:dur delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        card.transform = CGAffineTransformMakeTranslation(0, -overlap);
+    } completion:nil];
+}
+
+- (void)activationKeyboardWillHide:(NSNotification *)note {
+    UIView *card = self.activationCardView;
+    if (!card) return;
+    NSTimeInterval dur = [note.userInfo[UIKeyboardAnimationDurationUserInfoKey] doubleValue];
+    if (dur < 0.01) dur = 0.22;
+    [UIView animateWithDuration:dur delay:0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+- (void)activationBackdropTapped:(UITapGestureRecognizer *)gesture {
+    (void)gesture;
+    [self.activationKeyField resignFirstResponder];
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
+    UIView *card = self.activationCardView;
+    if (!card) return YES;
+    CGPoint p = [touch locationInView:card];
+    return ![card pointInside:p withEvent:nil];
+}
+
+- (void)fetchActivationBrandingUpdatingTitle:(UILabel *)titleLabel subtitle:(UILabel *)subtitleLabel {
+    if (!titleLabel) return;
+    NSString *tok = [self packageToken];
+    if (tok.length < 8) return;
+    NSString *host = [self verifyAPIHost];
+    NSURL *url = [NSURL URLWithString:[host stringByAppendingString:NSSENCRYPT("/api/licenses/activation-ui")]];
+    if (!url) return;
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+    req.HTTPMethod = NSSENCRYPT("POST");
+    req.timeoutInterval = 8.0;
+    [req setValue:NSSENCRYPT("application/json") forHTTPHeaderField:NSSENCRYPT("Content-Type")];
+    NSDictionary *payload = @{ NSSENCRYPT("packageToken"): tok };
+    NSData *body = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    if (!body) return;
+    req.HTTPBody = body;
+    __weak UILabel *weakTitle = titleLabel;
+    __weak UILabel *weakSub = subtitleLabel;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        if (error) return;
+        NSDictionary *json = nil;
+        if (data.length > 0) {
+            json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        }
+        if (![[json objectForKey:NSSENCRYPT("ok")] boolValue]) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UILabel *t = weakTitle;
+            UILabel *s = weakSub;
+            if (!t.window) return;
+            id vt = [json objectForKey:NSSENCRYPT("uiTitle")];
+            if ([vt isKindOfClass:[NSString class]] && [(NSString *)vt length] > 0) {
+                t.text = (NSString *)vt;
+            }
+            id vs = [json objectForKey:NSSENCRYPT("uiSubtitle")];
+            if (s) {
+                if ([vs isKindOfClass:[NSString class]] && [(NSString *)vs length] > 0) {
+                    s.text = (NSString *)vs;
+                    s.alpha = 1.0;
+                } else {
+                    s.text = @"";
+                    s.alpha = 0.0;
+                }
+            }
+        });
+    }] resume];
+}
+
+- (void)activationDismissKeyboardAndSubmitWithField:(UITextField *)field {
+    if (!field || field.tag != kAOVActivationKeyFieldTag) return;
+    NSString *key = [field.text copy] ?: @"";
+    [field resignFirstResponder];
+    UIView *ov = self.activationOverlayView;
+    if (ov) {
+        [ov endEditing:YES];
+    } else if (field.window) {
+        [field.window endEditing:YES];
+    }
+    __weak AOVLicenseGateManager *weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf runActivationVerifyWithKeyString:key];
+    });
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (textField.tag != kAOVActivationKeyFieldTag) return YES;
+    [self activationDismissKeyboardAndSubmitWithField:textField];
+    return NO;
+}
+
+- (void)activationAccessoryDoneTapped:(id)sender {
+    (void)sender;
+    [self activationDismissKeyboardAndSubmitWithField:self.activationKeyField];
+}
+
+- (void)runActivationVerifyWithKeyString:(NSString *)key {
+    self.promptVisible = NO;
+    UIView *overlay = self.activationOverlayView;
+    if (overlay) {
+        [overlay endEditing:YES];
+    }
+    [self dismissActivationOverlayAnimated:NO];
+    [self verifyWithKey:key];
+}
+
 - (void)presentPromptIfNeededWithMessage:(NSString * _Nullable)message {
     if (self.verified || self.promptVisible) return;
-    UIViewController *top = [self topViewController];
-    if (!top) {
+    if (self.activationOverlayView.superview) return;
+
+    UIWindow *hostWindow = [self activationHostWindow];
+    if (!hostWindow) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [self presentPromptIfNeededWithMessage:message];
         });
         return;
     }
-    if (top.presentedViewController) return;
 
     self.promptVisible = YES;
 
-    NSString *savedKey = [[NSUserDefaults standardUserDefaults] stringForKey:kAOVLicenseValueKey] ?: @"";
-    NSString *savedPlan = [[NSUserDefaults standardUserDefaults] stringForKey:kAOVLicensePlanKey] ?: @"-";
-    NSString *savedExpiry = [[NSUserDefaults standardUserDefaults] stringForKey:kAOVLicenseExpiryKey] ?: @"-";
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *cachedTitle = [ud stringForKey:kAOVCachedUITitleKey];
+    if (cachedTitle.length == 0) cachedTitle = @"AOV Pro Activation";
+    NSString *cachedSub = [ud stringForKey:kAOVCachedUISubtitleKey] ?: @"";
+
+    NSString *savedKey = [ud stringForKey:kAOVLicenseValueKey] ?: @"";
+    NSString *savedPlan = [ud stringForKey:kAOVLicensePlanKey] ?: @"-";
+    NSString *savedExpiry = [ud stringForKey:kAOVLicenseExpiryKey] ?: @"-";
     NSString *detail = [NSString stringWithFormat:@"Plan: %@\nExpires: %@\n%@", savedPlan, savedExpiry, message ?: @"Nhap key de mo menu."];
 
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"AOV Pro Activation"
-                                                                   message:detail
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-        textField.placeholder = @"License key";
-        textField.text = savedKey;
-        textField.autocorrectionType = UITextAutocorrectionTypeNo;
-        textField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-    }];
+    CGRect bounds = hostWindow.bounds;
+    CGFloat safeSide = 18.0;
+    CGFloat cardW = MIN(CGRectGetWidth(bounds) - safeSide * 2, 342.0);
+    CGFloat pad = 18.0;
+    UIFont *titleFont = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    UIFont *bodyFont = [UIFont systemFontOfSize:14 weight:UIFontWeightRegular];
+    UIFont *subFont = [UIFont systemFontOfSize:13 weight:UIFontWeightRegular];
+    CGFloat textW = cardW - pad * 2;
 
-    UIAlertAction *verifyAction = [UIAlertAction actionWithTitle:@"Verify key" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
-        AOVLicenseGateManager *selfRef = [AOVLicenseGateManager shared];
-        selfRef.promptVisible = NO;
-        NSString *key = alert.textFields.firstObject.text ?: @"";
-        [selfRef verifyWithKey:key];
-    }];
-    [alert addAction:verifyAction];
+    CGRect detailRect = [detail boundingRectWithSize:CGSizeMake(textW, CGFLOAT_MAX)
+                                             options:NSStringDrawingUsesLineFragmentOrigin
+                                          attributes:@{ NSFontAttributeName: bodyFont }
+                                             context:nil];
+    CGFloat detailH = MIN(ceil(detailRect.size.height), 120.0);
+    CGFloat titleH = 24.0;
+    CGFloat gapT = 6.0;
+    CGFloat subRowH = 20.0;
+    CGFloat subGapAfter = 6.0;
+    CGFloat gapM = 14.0;
+    CGFloat fieldH = 46.0;
+    CGFloat gapB = 16.0;
+    CGFloat btnH = 48.0;
+    CGFloat bottomPad = 18.0;
+    CGFloat cardH = pad + titleH + gapT + subRowH + subGapAfter + detailH + gapM + fieldH + gapB + btnH + bottomPad;
 
-    UIAlertAction *contactAction = [UIAlertAction actionWithTitle:@"Contact admin" style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
-        AOVLicenseGateManager *selfRef = [AOVLicenseGateManager shared];
-        selfRef.promptVisible = NO;
-        UIApplication *app = [UIApplication sharedApplication];
-        NSURL *tgAppURL = [NSURL URLWithString:NSSENCRYPT("tg://resolve?domain=wtuananh6886")];
-        if (tgAppURL && [app canOpenURL:tgAppURL]) {
-            [app openURL:tgAppURL options:@{} completionHandler:nil];
-        } else {
-            NSURL *webURL = [NSURL URLWithString:NSSENCRYPT("https://t.me/wtuananh6886")];
-            if (webURL) [app openURL:webURL options:@{} completionHandler:nil];
-        }
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            [selfRef presentPromptIfNeededWithMessage:@"Lien he @wtuananh6886 de lay key."];
-        });
-    }];
-    [alert addAction:contactAction];
+    UIView *overlay = [[UIView alloc] initWithFrame:bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.5];
+    overlay.alpha = 0.0;
 
-    [top presentViewController:alert animated:YES completion:nil];
+    CGFloat cardX = (CGRectGetWidth(bounds) - cardW) * 0.5;
+    CGFloat cardY = (CGRectGetHeight(bounds) - cardH) * 0.48;
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(cardX, cardY, cardW, cardH)];
+    card.backgroundColor = [UIColor colorWithRed:0.10 green:0.13 blue:0.20 alpha:1.0];
+    card.layer.cornerRadius = 16.0;
+    card.layer.borderWidth = 1.0;
+    card.layer.borderColor = [UIColor colorWithRed:0.28 green:0.52 blue:0.88 alpha:0.42].CGColor;
+    card.clipsToBounds = YES;
+    card.transform = CGAffineTransformMakeTranslation(0, 14);
+    [overlay addSubview:card];
+
+    UITapGestureRecognizer *backdropTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(activationBackdropTapped:)];
+    backdropTap.cancelsTouchesInView = NO;
+    backdropTap.delegate = self;
+    [overlay addGestureRecognizer:backdropTap];
+
+    CGFloat y = pad;
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, textW, titleH)];
+    titleLabel.text = cachedTitle;
+    titleLabel.font = titleFont;
+    titleLabel.textColor = [UIColor colorWithWhite:0.96 alpha:1.0];
+    [card addSubview:titleLabel];
+    y += titleH + gapT;
+
+    UILabel *subtitleLabel = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, textW, subRowH)];
+    subtitleLabel.text = cachedSub;
+    subtitleLabel.font = subFont;
+    subtitleLabel.textColor = [UIColor colorWithWhite:0.62 alpha:1.0];
+    subtitleLabel.numberOfLines = 2;
+    subtitleLabel.alpha = (cachedSub.length > 0) ? 1.0 : 0.0;
+    [card addSubview:subtitleLabel];
+    y += subRowH + subGapAfter;
+
+    UILabel *detailLabel = [[UILabel alloc] initWithFrame:CGRectMake(pad, y, textW, detailH)];
+    detailLabel.text = detail;
+    detailLabel.font = bodyFont;
+    detailLabel.textColor = [UIColor colorWithWhite:0.72 alpha:1.0];
+    detailLabel.numberOfLines = 0;
+    [card addSubview:detailLabel];
+    y += detailH + gapM;
+
+    UITextField *keyField = [[UITextField alloc] initWithFrame:CGRectMake(pad, y, textW, fieldH)];
+    keyField.tag = kAOVActivationKeyFieldTag;
+    keyField.placeholder = @"License key";
+    keyField.text = savedKey;
+    keyField.font = [UIFont systemFontOfSize:16 weight:UIFontWeightRegular];
+    keyField.textColor = UIColor.whiteColor;
+    keyField.autocorrectionType = UITextAutocorrectionTypeNo;
+    keyField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+    keyField.returnKeyType = UIReturnKeyDone;
+    keyField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    keyField.layer.cornerRadius = 11.0;
+    keyField.layer.borderWidth = 1.0;
+    keyField.layer.borderColor = [UIColor colorWithWhite:0.28 alpha:0.9].CGColor;
+    keyField.backgroundColor = [UIColor colorWithRed:0.06 green:0.08 blue:0.12 alpha:1.0];
+    keyField.delegate = self;
+    UIToolbar *accBar = [[UIToolbar alloc] initWithFrame:CGRectMake(0, 0, CGRectGetWidth(bounds), 44)];
+    accBar.translucent = YES;
+    UIBarButtonItem *accFlex = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    UIBarButtonItem *accDone = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(activationAccessoryDoneTapped:)];
+    accBar.items = @[accFlex, accDone];
+    keyField.inputAccessoryView = accBar;
+    UIView *leftPad = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 12, fieldH)];
+    keyField.leftView = leftPad;
+    keyField.leftViewMode = UITextFieldViewModeAlways;
+    [card addSubview:keyField];
+    self.activationKeyField = keyField;
+    self.activationCardView = card;
+    self.activationTitleLabel = titleLabel;
+    self.activationSubtitleLabel = subtitleLabel;
+    y += fieldH + gapB;
+
+    CGFloat btnGap = 10.0;
+    CGFloat btnW = (textW - btnGap) * 0.5;
+
+    UIButton *contactBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    contactBtn.frame = CGRectMake(pad, y, btnW, btnH);
+    [contactBtn setTitle:@"Contact admin" forState:UIControlStateNormal];
+    contactBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    [contactBtn setTitleColor:[UIColor colorWithRed:0.55 green:0.78 blue:1.0 alpha:1.0] forState:UIControlStateNormal];
+    contactBtn.backgroundColor = [UIColor colorWithWhite:0.18 alpha:1.0];
+    contactBtn.layer.cornerRadius = 12.0;
+    contactBtn.layer.borderWidth = 1.0;
+    contactBtn.layer.borderColor = [UIColor colorWithRed:0.35 green:0.55 blue:0.85 alpha:0.45].CGColor;
+    [card addSubview:contactBtn];
+
+    UIButton *verifyBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    verifyBtn.frame = CGRectMake(pad + btnW + btnGap, y, btnW, btnH);
+    [verifyBtn setTitle:@"Verify key" forState:UIControlStateNormal];
+    verifyBtn.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    [verifyBtn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    verifyBtn.backgroundColor = [UIColor colorWithRed:0.22 green:0.52 blue:0.95 alpha:1.0];
+    verifyBtn.layer.cornerRadius = 12.0;
+    [card addSubview:verifyBtn];
+
+    [contactBtn addTarget:self action:@selector(activationContactTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [verifyBtn addTarget:self action:@selector(activationVerifyTapped:) forControlEvents:UIControlEventTouchUpInside];
+
+    self.activationOverlayView = overlay;
+    [hostWindow addSubview:overlay];
+
+    if (!self.activationKeyboardObserversActive) {
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(activationKeyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(activationKeyboardWillHide:) name:UIKeyboardWillHideNotification object:nil];
+        self.activationKeyboardObserversActive = YES;
+    }
+
+    [self fetchActivationBrandingUpdatingTitle:titleLabel subtitle:subtitleLabel];
+
+    [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction animations:^{
+        overlay.alpha = 1.0;
+        card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+- (void)activationContactTapped:(UIButton *)sender {
+    self.promptVisible = NO;
+    [self dismissActivationOverlayAnimated:YES];
+    UIApplication *app = [UIApplication sharedApplication];
+    NSURL *tgAppURL = [NSURL URLWithString:NSSENCRYPT("tg://resolve?domain=wtuananh6886")];
+    if (tgAppURL && [app canOpenURL:tgAppURL]) {
+        [app openURL:tgAppURL options:@{} completionHandler:nil];
+    } else {
+        NSURL *webURL = [NSURL URLWithString:NSSENCRYPT("https://t.me/wtuananh6886")];
+        if (webURL) [app openURL:webURL options:@{} completionHandler:nil];
+    }
+    __weak AOVLicenseGateManager *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf presentPromptIfNeededWithMessage:@"Lien he @wtuananh6886 de lay key."];
+    });
+}
+
+- (void)activationVerifyTapped:(UIButton *)sender {
+    (void)sender;
+    [self activationDismissKeyboardAndSubmitWithField:self.activationKeyField];
 }
 
 - (void)verifyWithKey:(NSString *)key {
@@ -432,7 +863,7 @@ static NSString * const kAOVPackageTokenKey = @"aov.package.token";
         return;
     }
 
-    NSString *host = NSSENCRYPT("https://webapikey-sable.vercel.app");
+    NSString *host = [self verifyAPIHost];
     NSURL *url = [NSURL URLWithString:[host stringByAppendingString:NSSENCRYPT("/api/licenses/verify")]];
     if (!url) {
         self.autoVerifyInProgress = NO;

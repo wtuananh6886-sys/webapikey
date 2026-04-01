@@ -58,7 +58,10 @@ function LoginForm() {
       toast.error(err?.message ?? "Invalid login credentials");
       return;
     }
-    router.push("/dashboard");
+    const next = searchParams.get("next");
+    const safe =
+      next && next.startsWith("/dashboard") && !next.startsWith("//") ? next : "/dashboard";
+    router.push(safe);
   };
 
   return (

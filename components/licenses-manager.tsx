@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
@@ -17,7 +17,7 @@ const CreateLicenseSchema = z.object({
   status: z.enum(["active", "inactive", "expired", "banned", "revoked"]),
   assignedUser: z.string().optional(),
   deviceId: z.string().optional(),
-  maxDevices: z.number().int().min(1).max(20),
+  maxDevices: z.number().int().min(1).max(20).optional(),
   durationDays: z.number().int().min(1).max(3650).optional(),
 }).superRefine((data, ctx) => {
   if (data.keyMode === "static" && !data.key?.trim()) {
@@ -35,21 +35,57 @@ const CreatePackageSchema = z.object({
 });
 type CreatePackageForm = z.infer<typeof CreatePackageSchema>;
 
-export function LicensesManager({ initialData }: { initialData: License[] }) {
+type AccountPackageRow = {
+  name: string;
+  token: string;
+  status: string;
+  activationUiTitle?: string | null;
+  activationUiSubtitle?: string | null;
+};
+
+export function LicensesManager({ initialData = [] }: { initialData?: License[] }) {
   const [licenses, setLicenses] = useState<License[]>(initialData);
+  const [licensesLoading, setLicensesLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [accountPackages, setAccountPackages] = useState<Array<{ name: string; token: string; status: string }>>([]);
+  const [accountPackages, setAccountPackages] = useState<AccountPackageRow[]>([]);
   const [accountRole, setAccountRole] = useState("viewer");
   const [accountEmail, setAccountEmail] = useState("");
   const [accountUsername, setAccountUsername] = useState("");
   const [currentPackage, setCurrentPackage] = useState("viewer");
   const [creatingPackage, setCreatingPackage] = useState(false);
+  const [brandPkg, setBrandPkg] = useState("");
+  const [brandTitle, setBrandTitle] = useState("");
+  const [brandSub, setBrandSub] = useState("");
+  const [savingBrand, setSavingBrand] = useState(false);
+  const [brandPreviewLoading, setBrandPreviewLoading] = useState(false);
+  const [brandPreview, setBrandPreview] = useState<{
+    ok: boolean;
+    uiTitle?: string;
+    uiSubtitle?: string | null;
+    reason?: string;
+  } | null>(null);
 
-  const refreshLicenses = useCallback(async () => {
-    const res = await fetch("/api/licenses", { method: "GET" });
-    if (!res.ok) return;
-    const body = (await res.json()) as { data: License[] };
-    setLicenses(body.data);
+  const refreshLicenses = useCallback(async (options?: { showLoadingOverlay?: boolean }) => {
+    const showOverlay = options?.showLoadingOverlay ?? false;
+    if (showOverlay) setLicensesLoading(true);
+    try {
+      const res = await fetch("/api/licenses", { method: "GET", credentials: "same-origin" });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => null)) as { message?: string } | null;
+        toast.error(
+          err?.message ?? `Không tải được danh sách key (HTTP ${res.status}). Kiểm tra đăng nhập / biến môi trường Supabase trên server.`
+        );
+        setLicenses([]);
+        return;
+      }
+      const body = (await res.json()) as { data: License[] };
+      setLicenses(Array.isArray(body.data) ? body.data : []);
+    } catch {
+      toast.error("Lỗi mạng khi tải danh sách key.");
+      setLicenses([]);
+    } finally {
+      if (showOverlay) setLicensesLoading(false);
+    }
   }, []);
 
   const defaultExpiry = useMemo(() => 30, []);
@@ -96,13 +132,97 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
 
     const res = await fetch("/api/packages", { method: "GET" });
     if (!res.ok) return;
-    const body = (await res.json()) as { data?: Array<{ name: string; token: string; status: string }> };
+    const body = (await res.json()) as { data?: AccountPackageRow[] };
     const packages = (body.data ?? []).filter((item) => item.status === "active");
     setAccountPackages(packages);
     if (packages.length > 0 && !form.getValues("packageName")) {
       form.setValue("packageName", packages[0].name, { shouldValidate: true });
     }
   }, [form]);
+
+  useEffect(() => {
+    if (accountPackages.length === 0) {
+      setBrandPkg("");
+      setBrandTitle("");
+      setBrandSub("");
+      return;
+    }
+    if (!brandPkg || !accountPackages.some((p) => p.name === brandPkg)) {
+      setBrandPkg(accountPackages[0].name);
+    }
+  }, [accountPackages, brandPkg]);
+
+  useEffect(() => {
+    const p = accountPackages.find((x) => x.name === brandPkg);
+    if (!p) return;
+    setBrandTitle(p.activationUiTitle?.trim() ?? "");
+    setBrandSub(p.activationUiSubtitle?.trim() ?? "");
+  }, [brandPkg, accountPackages]);
+
+  const saveActivationBranding = async () => {
+    if (!brandPkg) {
+      toast.error("Chọn package");
+      return;
+    }
+    setSavingBrand(true);
+    try {
+      const res = await fetch("/api/packages", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          name: brandPkg,
+          activationUiTitle: brandTitle.trim() === "" ? null : brandTitle.trim(),
+          activationUiSubtitle: brandSub.trim() === "" ? null : brandSub.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json().catch(() => null)) as { message?: string } | null;
+        toast.error(err?.message ?? "Lưu thất bại");
+        return;
+      }
+      toast.success("Đã lưu tiêu đề màn hình nhập key");
+      await refreshAccountContext();
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
+  const testActivationUiApi = async () => {
+    const tok = accountPackages.find((p) => p.name === brandPkg)?.token;
+    if (!tok || tok.length < 8) {
+      toast.error("Chọn package có token hợp lệ");
+      return;
+    }
+    setBrandPreviewLoading(true);
+    setBrandPreview(null);
+    try {
+      const res = await fetch("/api/licenses/activation-ui", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ packageToken: tok }),
+      });
+      const j = (await res.json()) as { ok?: boolean; uiTitle?: string; uiSubtitle?: string | null; reason?: string; message?: string };
+      if (!res.ok || !j.ok) {
+        const reason = j.reason ?? j.message ?? `HTTP ${res.status}`;
+        setBrandPreview({ ok: false, reason: String(reason) });
+        toast.error(`API: ${reason}`);
+        return;
+      }
+      setBrandPreview({
+        ok: true,
+        uiTitle: typeof j.uiTitle === "string" ? j.uiTitle : undefined,
+        uiSubtitle: j.uiSubtitle === undefined ? null : j.uiSubtitle,
+      });
+      toast.success("Client (tweak) sẽ nhận title/subtitle như bên dưới");
+    } catch {
+      toast.error("Lỗi mạng khi gọi activation-ui");
+      setBrandPreview({ ok: false, reason: "network" });
+    } finally {
+      setBrandPreviewLoading(false);
+    }
+  };
 
   const onCreate = async (values: CreateLicenseForm) => {
     setSubmitting(true);
@@ -111,11 +231,16 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
         toast.error("Package token khong ton tai, vui long tao/chon package hop le");
         return;
       }
+      const maxDevices =
+        values.maxDevices == null || Number.isNaN(values.maxDevices)
+          ? 1
+          : Math.min(20, Math.max(1, values.maxDevices));
       const res = await fetch("/api/licenses", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ...values,
+          maxDevices,
           packageToken: selectedPackageToken,
           durationDays: values.durationDays ?? defaultExpiry,
           assignedUser: values.assignedUser || null,
@@ -176,7 +301,8 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
 
   useEffect(() => {
     void refreshAccountContext();
-  }, [refreshAccountContext]);
+    void refreshLicenses({ showLoadingOverlay: true });
+  }, [refreshAccountContext, refreshLicenses]);
 
   return (
     <div className="space-y-4">
@@ -228,6 +354,70 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
       </Card>
 
       <Card>
+        <h2 className="mb-1 text-base font-semibold">Tiêu đề màn hình nhập key (client / ImGui)</h2>
+        <p className="mb-3 text-sm text-slate-400">
+          Mỗi package có thể đặt title & dòng phụ hiển thị trên tweak. Để trống title → client dùng mặc định &quot;AOV Pro Activation&quot;. API:{" "}
+          <code className="text-xs text-cyan-300/90">POST /api/licenses/activation-ui</code> với <code className="text-xs">packageToken</code>.
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <Select value={brandPkg} onChange={(e) => setBrandPkg(e.target.value)} disabled={accountPackages.length === 0}>
+            {accountPackages.length === 0 ? (
+              <option value="">Chưa có package</option>
+            ) : (
+              accountPackages.map((pkg) => (
+                <option key={pkg.name} value={pkg.name}>
+                  {pkg.name}
+                </option>
+              ))
+            )}
+          </Select>
+          <div className="md:col-span-2 grid gap-2 sm:grid-cols-2">
+            <Input
+              placeholder="Tiêu đề (vd: Shop Key VIP)"
+              value={brandTitle}
+              onChange={(e) => setBrandTitle(e.target.value)}
+              maxLength={80}
+            />
+            <Input
+              placeholder="Dòng phụ tùy chọn (vd: Liên hệ admin sau khi mua)"
+              value={brandSub}
+              onChange={(e) => setBrandSub(e.target.value)}
+              maxLength={160}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2 md:col-span-2">
+            <Button type="button" disabled={savingBrand || accountPackages.length === 0} onClick={() => void saveActivationBranding()}>
+              {savingBrand ? "Đang lưu…" : "Lưu tiêu đề"}
+            </Button>
+            <button
+              type="button"
+              disabled={brandPreviewLoading || accountPackages.length === 0 || !brandPkg}
+              onClick={() => void testActivationUiApi()}
+              className="rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {brandPreviewLoading ? "Đang gọi API…" : "Thử API (như tweak)"}
+            </button>
+          </div>
+          {brandPreview && (
+            <div className="md:col-span-2 rounded-lg border border-slate-600/80 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+              {brandPreview.ok ? (
+                <p>
+                  <span className="font-medium text-emerald-300">uiTitle:</span> {brandPreview.uiTitle ?? "—"}
+                  <br />
+                  <span className="font-medium text-emerald-300">uiSubtitle:</span>{" "}
+                  {brandPreview.uiSubtitle === null || brandPreview.uiSubtitle === undefined || brandPreview.uiSubtitle === ""
+                    ? "—"
+                    : brandPreview.uiSubtitle}
+                </p>
+              ) : (
+                <p className="text-red-300">Lỗi: {brandPreview.reason ?? "unknown"}</p>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Card>
         <h2 className="text-base font-semibold">Tao key moi</h2>
         <p className="mb-4 text-sm text-slate-400">Chon package cua account. Key format bat buoc: package-&lt;days&gt;day-XXXXXX.</p>
         <div className="mb-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">
@@ -263,21 +453,58 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
           </Select>
           <Input placeholder="Assigned user (optional)" {...form.register("assignedUser")} />
           <Input placeholder="Device ID (optional)" {...form.register("deviceId")} />
-          <Input
-            type="number"
-            min={1}
-            max={20}
-            placeholder="Max devices"
-            {...form.register("maxDevices", { valueAsNumber: true })}
+          <Controller
+            name="maxDevices"
+            control={form.control}
+            render={({ field }) => (
+              <Input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Max devices (1–20)"
+                value={field.value === undefined || field.value === null ? "" : String(field.value)}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "");
+                  if (digits === "") {
+                    field.onChange(undefined);
+                    return;
+                  }
+                  const n = parseInt(digits, 10);
+                  if (!Number.isNaN(n)) field.onChange(n);
+                }}
+                onBlur={() => {
+                  const v = field.value;
+                  if (v === undefined || v === null || Number.isNaN(v) || v < 1) field.onChange(1);
+                  else if (v > 20) field.onChange(20);
+                  field.onBlur();
+                }}
+              />
+            )}
           />
-          <Input
-            type="number"
-            min={1}
-            max={3650}
-            placeholder="Thoi han key (days) - vd: 30"
-            {...form.register("durationDays", {
-              setValueAs: (value) => (value === "" || value == null ? undefined : Number(value)),
-            })}
+          <Controller
+            name="durationDays"
+            control={form.control}
+            render={({ field }) => (
+              <Input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="Thoi han key (days) - vd: 30"
+                value={field.value === undefined || field.value === null ? "" : String(field.value)}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, "");
+                  if (digits === "") {
+                    field.onChange(undefined);
+                    return;
+                  }
+                  const n = parseInt(digits, 10);
+                  if (!Number.isNaN(n)) field.onChange(n);
+                }}
+                onBlur={() => {
+                  field.onBlur();
+                }}
+              />
+            )}
           />
           <div className="md:col-span-2">
             <Button type="submit" disabled={submitting}>
@@ -308,7 +535,9 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="font-semibold">ImGui API Client</h3>
-            <p className="text-sm text-slate-400">Tai goi ma nguon mau de them vao tweak ImGui.</p>
+            <p className="text-sm text-slate-400">
+              File <code className="text-xs text-cyan-300/90">public/api.zip</code> tạo lúc <code className="text-xs">npm run build</code> / <code className="text-xs">dev</code> từ <code className="text-xs">integration-client</code> — deploy lại là zip mới.
+            </p>
           </div>
           <a
             href="/api.zip"
@@ -320,7 +549,11 @@ export function LicensesManager({ initialData }: { initialData: License[] }) {
         </div>
       </Card>
 
-      <TanstackLicenseTable data={licenses} onRefresh={refreshLicenses} />
+      {licensesLoading ? (
+        <Card className="p-6 text-center text-sm text-slate-400">Đang tải danh sách key từ server…</Card>
+      ) : (
+        <TanstackLicenseTable data={licenses} onRefresh={refreshLicenses} />
+      )}
     </div>
   );
 }

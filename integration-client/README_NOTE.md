@@ -32,7 +32,7 @@ Neu ban muon patch nhanh theo mau hoan chinh, copy them:
 - `TweakEntry.mm` -> `UI/TweakEntry.mm`
 - `Makefile` -> `Makefile` (so sanh va merge)
 
-Khong co file `ImGuiDrawView.mm` trong package nay.
+Trong `aovpro-files/` co the co `ImGuiDrawView.mm` lam **mau tham khao** (tuy chon copy/merge vao project cua ban).
 
 ---
 
@@ -109,9 +109,39 @@ Response thanh cong:
 {
   "ok": true,
   "plan": "pro",
-  "expiresAt": "2026-12-31T23:59:59Z"
+  "expiresAt": "2026-12-31T23:59:59Z",
+  "packageName": "ten-package",
+  "uiTitle": "Tieu de UI (Dashboard)",
+  "uiSubtitle": "Dong phu hoac bo qua"
 }
 ```
+
+### 4a) Branding man hinh nhap key (Dashboard + client)
+
+- Tren web: `Dashboard -> Licenses` → muc **Tiêu đề màn hình nhập key** → chon package → nhap title/subtitle → **Luu** (PATCH `/api/packages`).
+- Client `AOVLicenseGateManager.mm` goi `POST /api/licenses/activation-ui` voi `packageToken` khi mo UI, va doc `uiTitle`/`uiSubtitle` tu response verify de cache `NSUserDefaults`.
+- Nut **Thử API (như tweak)** tren cung trang Licenses de kiem tra JSON truoc khi build tweak.
+
+### 4b) Session JWT (tuy chon — backend)
+
+Neu tren Vercel/server dat `LICENSE_SESSION_SECRET` (xem `.env.example` trong repo web), verify se them `sessionToken` + `sessionExpiresInSec`.
+
+- File `AOVLicenseGateManager.mm` (ban cap nhat) se:
+  - Luu `sessionToken` vao UserDefaults
+  - Moi **15 phut** + khi app **active lai** goi `POST /api/licenses/session` voi header `Authorization: Bearer <sessionToken>`
+  - Neu **401/403** hoac license bi khoa → xoa session, tat `isVerified`, hien lai nhap key
+
+Neu **chua** dat `LICENSE_SESSION_SECRET` tren server: response khong co `sessionToken` — client bo qua refresh (hanh vi cu nhu cu). Ma **503** tu `/api/licenses/session` cung duoc bo qua (khong tat license).
+
+### 4c) File aovpro-files can cap nhat khi keo tu repo web
+
+- **Bat buoc copy lai** khi co cap nhat UI key / keyboard / branding / session: `AOVLicenseGateManager.mm` (va merge `verifyAPIHost` neu ban da doi host).
+- **Khong doi** (thuong): `AOVLicenseGateManager.h`, `AOVLicenseTimeUtils.*`, `Obfuscate.h`, `Makefile`, `TweakEntry.mm` (tru khi ban tu custom them).
+- **ImGuiDrawView.mm** (trong project game cua ban): van can guard `isVerified` nhu cu — file trong zip chi la mau tham khao.
+
+### 4d) Tai api.zip
+
+- Tren Dashboard Licenses → **Tai api.zip** (`/api.zip`). File la **`public/api.zip`** duoc tao **moi lan** `npm run build` hoac `npm run dev` (script `scripts/build-api-zip.mjs`) tu `integration-client` + `docs` — Vercel cung chay `prebuild` truoc build nen zip tren server luon moi sau moi deploy.
 
 ---
 

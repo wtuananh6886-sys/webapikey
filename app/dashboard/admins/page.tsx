@@ -16,14 +16,27 @@ type Row = {
   } | null;
 };
 
+type QuotaDraft = { pkg: string; key: string };
+
 export default function AdminsPage() {
   const [rows, setRows] = useState<Row[]>([]);
+  /** Text drafts per email — avoids controlled number input "010" / cannot clear issues. */
+  const [quotaDrafts, setQuotaDrafts] = useState<Record<string, QuotaDraft>>({});
   const [savingEmail, setSavingEmail] = useState<string | null>(null);
 
   const load = async () => {
     const res = await fetch("/api/admin/policies", { method: "GET" });
     if (!res.ok) return;
     const body = (await res.json()) as { data: Row[] };
+    const nextDrafts: Record<string, QuotaDraft> = {};
+    for (const r of body.data) {
+      const email = r.admin.email;
+      nextDrafts[email] = {
+        pkg: String(r.policy?.monthlyPackageTokenLimit ?? 0),
+        key: String(r.policy?.monthlyKeyLimit ?? 0),
+      };
+    }
+    setQuotaDrafts(nextDrafts);
     setRows(body.data);
   };
 
@@ -31,13 +44,23 @@ export default function AdminsPage() {
     void load();
   }, []);
 
+  const parseQuota = (raw: string) => {
+    const t = raw.trim();
+    if (t === "") return 0;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
+
   const save = async (row: Row) => {
     setSavingEmail(row.admin.email);
+    const d = quotaDrafts[row.admin.email];
+    const monthlyPackageTokenLimit = parseQuota(d?.pkg ?? String(row.policy?.monthlyPackageTokenLimit ?? 0));
+    const monthlyKeyLimit = parseQuota(d?.key ?? String(row.policy?.monthlyKeyLimit ?? 0));
     const payload = {
       email: row.admin.email,
       assignedPlan: row.policy?.assignedPlan ?? "basic",
-      monthlyPackageTokenLimit: row.policy?.monthlyPackageTokenLimit ?? 0,
-      monthlyKeyLimit: row.policy?.monthlyKeyLimit ?? 0,
+      monthlyPackageTokenLimit,
+      monthlyKeyLimit,
       expiresAt: row.policy?.expiresAt ? new Date(row.policy.expiresAt).toISOString() : null,
     };
     const res = await fetch("/api/admin/policies", {
@@ -123,59 +146,35 @@ export default function AdminsPage() {
                 </td>
                 <td className="p-2">
                   <Input
-                    type="number"
-                    value={row.policy?.monthlyPackageTokenLimit ?? 0}
-                    onChange={(e) =>
-                      setRows((prev) =>
-                        prev.map((it, i) =>
-                          i === idx
-                            ? {
-                                ...it,
-                                policy: {
-                                  ...(it.policy ?? {
-                                    assignedPlan: "basic",
-                                    monthlyPackageTokenLimit: 0,
-                                    monthlyKeyLimit: 0,
-                                    packageTokensUsedThisMonth: 0,
-                                    keysUsedThisMonth: 0,
-                                    expiresAt: null,
-                                  }),
-                                  monthlyPackageTokenLimit: Number(e.target.value) || 0,
-                                },
-                              }
-                            : it
-                        )
-                      )
-                    }
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    className="min-w-[4rem]"
+                    value={quotaDrafts[row.admin.email]?.pkg ?? ""}
+                    onChange={(e) => {
+                      const pkg = e.target.value.replace(/\D/g, "");
+                      setQuotaDrafts((prev) => ({
+                        ...prev,
+                        [row.admin.email]: { pkg, key: prev[row.admin.email]?.key ?? String(row.policy?.monthlyKeyLimit ?? 0) },
+                      }));
+                    }}
                   />
                   <p className="mt-1 text-xs text-slate-500">Used: {row.policy?.packageTokensUsedThisMonth ?? 0}</p>
                 </td>
                 <td className="p-2">
                   <Input
-                    type="number"
-                    value={row.policy?.monthlyKeyLimit ?? 0}
-                    onChange={(e) =>
-                      setRows((prev) =>
-                        prev.map((it, i) =>
-                          i === idx
-                            ? {
-                                ...it,
-                                policy: {
-                                  ...(it.policy ?? {
-                                    assignedPlan: "basic",
-                                    monthlyPackageTokenLimit: 0,
-                                    monthlyKeyLimit: 0,
-                                    packageTokensUsedThisMonth: 0,
-                                    keysUsedThisMonth: 0,
-                                    expiresAt: null,
-                                  }),
-                                  monthlyKeyLimit: Number(e.target.value) || 0,
-                                },
-                              }
-                            : it
-                        )
-                      )
-                    }
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    className="min-w-[4rem]"
+                    value={quotaDrafts[row.admin.email]?.key ?? ""}
+                    onChange={(e) => {
+                      const key = e.target.value.replace(/\D/g, "");
+                      setQuotaDrafts((prev) => ({
+                        ...prev,
+                        [row.admin.email]: { key, pkg: prev[row.admin.email]?.pkg ?? String(row.policy?.monthlyPackageTokenLimit ?? 0) },
+                      }));
+                    }}
                   />
                   <p className="mt-1 text-xs text-slate-500">Used: {row.policy?.keysUsedThisMonth ?? 0}</p>
                 </td>

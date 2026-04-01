@@ -26,12 +26,41 @@ Response thanh cong:
   "ok": true,
   "plan": "pro",
   "expiresAt": "2026-12-31T23:59:59Z",
+  "packageName": "ten-package",
+  "uiTitle": "Tieu de man hinh nhap key (tuy chon)",
+  "uiSubtitle": "Dong phu tuy chon hoac null",
   "featureFlags": {
     "allowAimAssist": true,
     "allowSkinBypass": true
   }
 }
 ```
+
+- `uiTitle` / `uiSubtitle`: lay tu cau hinh package tren Dashboard (Licenses → tiêu đề màn hình nhập key). Client UIKit (`AOVLicenseGateManager`) dung de cache hien thi.
+
+## 1b) API lay branding truoc khi verify (tuy chon)
+
+- `POST /api/licenses/activation-ui`
+
+Payload:
+
+```json
+{
+  "packageToken": "PKG_XXXXXXXXXXXXXXXX"
+}
+```
+
+Response thanh cong:
+
+```json
+{
+  "ok": true,
+  "uiTitle": "Shop Key VIP",
+  "uiSubtitle": "Lien he admin sau khi mua"
+}
+```
+
+Token lay tu Dashboard (Copy package token). Rate limit: 60 req/phut/IP+token (xem server).
 
 Response that bai:
 
@@ -70,7 +99,10 @@ Host can chinh duy nhat o client:
 
 Vao `Dashboard -> Licenses`, se co khu `ImGui API Client` voi nut `Tai api.zip`.
 
-File zip nay chua:
+URL: `GET /api.zip` — file tinh `public/api.zip` sinh ra luc **`npm run build`** / **`npm run dev`** (hook `prebuild`), **khong** doc file tu serverless (tranh Vercel thieu thu muc `integration-client`).
 
-- Huong dan tich hop nhanh
-- Mau `imgui-license-gate-example.cpp`
+File zip gom:
+
+- `README_NOTE.md` — huong dan copy file Theos / UIKit
+- `aovpro-files/*` — `AOVLicenseGateManager.mm` (UI nhap key + verify + branding), `.h`, session, Makefile mau, v.v.
+- `docs/imgui-integration.md`, `docs/imgui-license-gate-example.cpp` — tai lieu + mau ImGui

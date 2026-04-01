@@ -1,5 +1,4 @@
 import { LicensesManager } from "@/components/licenses-manager";
-import { licenses } from "@/lib/mock-data";
 import { Card } from "@/components/ui-kit";
 
 export default function LicensesPage() {
@@ -7,9 +6,11 @@ export default function LicensesPage() {
     <div className="space-y-4">
       <Card>
         <h1 className="text-xl font-semibold">Licenses / Keys</h1>
-        <p className="text-sm text-slate-400">Quan ly key, trang thai, device bind va expiry.</p>
+        <p className="text-sm text-slate-400">
+          Quan ly key, trang thai, device bind va expiry. Danh sach luon lay tu API sau khi mo trang (dong bo voi Supabase / server).
+        </p>
       </Card>
-      <LicensesManager initialData={licenses} />
+      <LicensesManager />
     </div>
   );
 }

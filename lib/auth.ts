@@ -9,11 +9,12 @@ export async function getSessionRole(): Promise<Role | null> {
   return null;
 }
 
+/** Align with `lib/dashboard-path-policy.ts` (middleware + sidebar). */
 export function hasPermission(role: Role, perm: string) {
   const map: Record<Role, string[]> = {
     owner: ["all"],
     admin: ["all"],
-    support: ["dashboard", "licenses", "logs"],
+    support: ["dashboard", "licenses", "logs", "servers", "tweaks"],
     viewer: ["dashboard", "logs"],
   };
   return map[role].includes("all") || map[role].includes(perm);

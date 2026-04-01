@@ -22,6 +22,8 @@ export interface License {
   createdAt: string;
   expiresAt: string;
   lastUsedAt: string | null;
+  /** Set on create server-side; omitted from API JSON when possible. Used for tenancy in mock mode. */
+  ownerEmail?: string;
 }
 
 export interface ServerNode {
@@ -85,6 +87,9 @@ export interface UserPackage {
   status: PackageStatus;
   createdAt: string;
   updatedAt: string;
+  /** Shown on client enter-key screen (optional). */
+  activationUiTitle?: string | null;
+  activationUiSubtitle?: string | null;
 }
 
 export interface AccountPolicy {

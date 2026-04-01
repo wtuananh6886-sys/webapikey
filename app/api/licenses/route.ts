@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { z } from "zod";
 import { defaultLimitsForRole, ensureAccountPolicyRow, monthTag } from "@/lib/account-policy";
 import { accountPolicies, licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
+import { getWaSession, isLicenseElevatedRole } from "@/lib/session-cookies";
 import type { AccountPolicy, License, Role } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -80,11 +80,6 @@ function keyMatchesFormat(key: string, packageName: string, durationDays: number
   const normalizedPackage = normalizePackageName(packageName);
   const pattern = new RegExp(`^${normalizedPackage}-${durationDays}day-[A-Z0-9]{6}$`);
   return pattern.test(key);
-}
-
-function parseRole(raw: string | undefined): Role {
-  if (raw === "owner" || raw === "admin" || raw === "support" || raw === "viewer") return raw;
-  return "viewer";
 }
 
 async function consumeKeyQuota(
@@ -183,34 +178,81 @@ async function insertLicenseLog(params: {
   });
 }
 
+function mapSupabaseRowToLicense(row: Record<string, unknown>): License {
+  return {
+    id: String(row.id),
+    name: (row.name as string) ?? (row.package_name as string) ?? "unknown-package",
+    packageName: (row.package_name as string) ?? (row.name as string) ?? "unknown-package",
+    key: row.key as string,
+    plan: row.plan as License["plan"],
+    keyMode: (row.key_mode as License["keyMode"]) ?? "dynamic",
+    status: row.status as License["status"],
+    assignedUser: (row.assigned_user as string | null) ?? null,
+    deviceId: (row.device_id as string | null) ?? null,
+    maxDevices: row.max_devices as number,
+    createdAt: row.created_at as string,
+    expiresAt: row.expires_at as string,
+    lastUsedAt: (row.last_used_at as string | null) ?? null,
+  };
+}
+
+function mockLicenseVisibleToAccount(lic: License, accountEmail: string): boolean {
+  if (lic.ownerEmail) return lic.ownerEmail.toLowerCase() === accountEmail;
+  const pkg = userPackages.find((p) => p.name === lic.packageName);
+  return (pkg?.ownerEmail ?? "").toLowerCase() === accountEmail;
+}
+
+async function supabaseLicenseOwnedByAccount(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>,
+  row: { owner_email?: string | null; package_name?: string | null },
+  accountEmail: string
+): Promise<boolean> {
+  if (row.owner_email && String(row.owner_email).toLowerCase() === accountEmail) return true;
+  if (row.owner_email) return false;
+  const pkgName = row.package_name;
+  if (!pkgName) return false;
+  const { data: pkg } = await supabase.from("user_packages").select("owner_email").eq("name", pkgName).maybeSingle();
+  return String(pkg?.owner_email ?? "").toLowerCase() === accountEmail;
+}
+
 export async function GET() {
+  const session = await getWaSession();
+  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  if (session.role === "viewer") {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+
+  const elevated = isLicenseElevatedRole(session.role);
+
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
-      const { data, error } = await supabase.from("licenses").select("*").order("created_at", { ascending: false });
+      let query = supabase.from("licenses").select("*").order("created_at", { ascending: false });
+      if (!elevated) {
+        query = query.eq("owner_email", session.email);
+      }
+      const { data, error } = await query;
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-      const mapped = (data ?? []).map((row) => ({
-        id: row.id,
-        name: row.name ?? row.package_name ?? "unknown-package",
-        packageName: row.package_name ?? row.name ?? "unknown-package",
-        key: row.key,
-        plan: row.plan,
-        keyMode: row.key_mode ?? "dynamic",
-        status: row.status,
-        assignedUser: row.assigned_user,
-        deviceId: row.device_id,
-        maxDevices: row.max_devices,
-        createdAt: row.created_at,
-        expiresAt: row.expires_at,
-        lastUsedAt: row.last_used_at,
-      } satisfies License));
+      const mapped = (data ?? []).map((row) => mapSupabaseRowToLicense(row as Record<string, unknown>));
       return NextResponse.json({ data: mapped });
     }
   }
-  return NextResponse.json({ data: licenses });
+
+  const list = elevated ? licenses : licenses.filter((lic) => mockLicenseVisibleToAccount(lic, session.email));
+  return NextResponse.json({
+    data: list.map(({ ownerEmail: _o, ...pub }) => pub),
+  });
 }
 
 export async function POST(req: Request) {
+  const session = await getWaSession();
+  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  if (session.role === "viewer") {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+  const elevated = isLicenseElevatedRole(session.role);
+  const { role, email } = session;
+
   const payload = await req.json();
   const parsed = CreateLicenseSchema.safeParse(payload);
   if (!parsed.success) {
@@ -218,9 +260,6 @@ export async function POST(req: Request) {
   }
 
   const data = parsed.data;
-  const cookieStore = await cookies();
-  const role = cookieStore.get("wa_role")?.value ?? "viewer";
-  const email = (cookieStore.get("wa_email")?.value ?? "viewer@local").toLowerCase();
   const computedExpiry = (() => {
     if (data.expiresAt) return data.expiresAt;
     const d = new Date();
@@ -245,6 +284,9 @@ export async function POST(req: Request) {
       if (packageDb.token !== data.packageToken) {
         return NextResponse.json({ message: "Package token mismatch" }, { status: 403 });
       }
+      if (!elevated && String(packageDb.owner_email ?? "").toLowerCase() !== email) {
+        return NextResponse.json({ message: "Package belongs to another account" }, { status: 403 });
+      }
     }
   } else {
     const packageRef = userPackages.find((pkg) => pkg.name === normalizedPackageName);
@@ -257,10 +299,13 @@ export async function POST(req: Request) {
     if (packageRef.token !== data.packageToken) {
       return NextResponse.json({ message: "Package token mismatch" }, { status: 403 });
     }
+    if (!elevated && packageRef.ownerEmail.toLowerCase() !== email) {
+      return NextResponse.json({ message: "Package belongs to another account" }, { status: 403 });
+    }
   }
   const durationDays = data.durationDays ?? 30;
-  if (!(role === "owner" || role === "admin")) {
-    const quota = await consumeKeyQuota(email, parseRole(role), data.plan);
+  if (!elevated) {
+    const quota = await consumeKeyQuota(email, role, data.plan);
     if (!quota.ok) {
       return NextResponse.json({ message: quota.message }, { status: quota.status });
     }
@@ -291,6 +336,7 @@ export async function POST(req: Request) {
     createdAt: new Date().toISOString(),
     expiresAt: computedExpiry,
     lastUsedAt: null,
+    ownerEmail: email,
   };
 
   if (isSupabaseEnabled()) {
@@ -310,38 +356,28 @@ export async function POST(req: Request) {
           max_devices: newLicense.maxDevices,
           expires_at: newLicense.expiresAt,
           last_used_at: newLicense.lastUsedAt,
+          owner_email: email,
         })
         .select("*")
         .single();
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-      return NextResponse.json(
-        {
-          data: {
-            id: inserted.id,
-            name: inserted.name ?? inserted.package_name,
-            packageName: inserted.package_name ?? inserted.name,
-            key: inserted.key,
-            plan: inserted.plan,
-            keyMode: inserted.key_mode ?? "dynamic",
-            status: inserted.status,
-            assignedUser: inserted.assigned_user,
-            deviceId: inserted.device_id,
-            maxDevices: inserted.max_devices,
-            createdAt: inserted.created_at,
-            expiresAt: inserted.expires_at,
-            lastUsedAt: inserted.last_used_at,
-          } satisfies License,
-        },
-        { status: 201 }
-      );
+      return NextResponse.json({ data: mapSupabaseRowToLicense(inserted as Record<string, unknown>) }, { status: 201 });
     }
   }
 
   licenses.unshift(newLicense);
-  return NextResponse.json({ data: newLicense }, { status: 201 });
+  const { ownerEmail: _omit, ...pub } = newLicense;
+  return NextResponse.json({ data: pub }, { status: 201 });
 }
 
 export async function PATCH(req: Request) {
+  const session = await getWaSession();
+  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  if (session.role === "viewer") {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+  const elevated = isLicenseElevatedRole(session.role);
+
   const ip = req.headers.get("x-forwarded-for") ?? "0.0.0.0";
   const payload = await req.json();
   const parsed = UpdateActionSchema.safeParse(payload);
@@ -356,6 +392,10 @@ export async function PATCH(req: Request) {
       const { data: current, error: currentErr } = await supabase.from("licenses").select("*").eq("id", id).maybeSingle();
       if (currentErr) return NextResponse.json({ message: currentErr.message }, { status: 500 });
       if (!current) return NextResponse.json({ message: "License not found" }, { status: 404 });
+
+      if (!elevated && !(await supabaseLicenseOwnedByAccount(supabase, current, session.email))) {
+        return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+      }
 
       let nextStatus = current.status;
       let nextExpires = current.expires_at;
@@ -382,28 +422,16 @@ export async function PATCH(req: Request) {
         metadata: action === "extend" ? { days: days ?? 7 } : {},
       });
 
-      return NextResponse.json({
-        data: {
-          id: updated.id,
-          name: updated.name ?? updated.package_name,
-          packageName: updated.package_name ?? updated.name,
-          key: updated.key,
-          plan: updated.plan,
-          keyMode: updated.key_mode ?? "dynamic",
-          status: updated.status,
-          assignedUser: updated.assigned_user,
-          deviceId: updated.device_id,
-          maxDevices: updated.max_devices,
-          createdAt: updated.created_at,
-          expiresAt: updated.expires_at,
-          lastUsedAt: updated.last_used_at,
-        } satisfies License,
-      });
+      return NextResponse.json({ data: mapSupabaseRowToLicense(updated as Record<string, unknown>) });
     }
   }
 
   const license = licenses.find((l) => l.id === id);
   if (!license) return NextResponse.json({ message: "License not found" }, { status: 404 });
+
+  if (!elevated && !mockLicenseVisibleToAccount(license, session.email)) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
 
   if (action === "ban") {
     license.status = "banned";
@@ -424,10 +452,18 @@ export async function PATCH(req: Request) {
     createdAt: new Date().toISOString(),
   });
 
-  return NextResponse.json({ data: license });
+  const { ownerEmail: _o, ...pub } = license;
+  return NextResponse.json({ data: pub });
 }
 
 export async function DELETE(req: Request) {
+  const session = await getWaSession();
+  if (!session) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  if (session.role === "viewer") {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+  const elevated = isLicenseElevatedRole(session.role);
+
   const ip = req.headers.get("x-forwarded-for") ?? "0.0.0.0";
   const payload = await req.json();
   const parsed = DeleteLicenseSchema.safeParse(payload);
@@ -439,32 +475,27 @@ export async function DELETE(req: Request) {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
+      const { data: current, error: curErr } = await supabase.from("licenses").select("*").eq("id", id).maybeSingle();
+      if (curErr) return NextResponse.json({ message: curErr.message }, { status: 500 });
+      if (!current) return NextResponse.json({ message: "License not found" }, { status: 404 });
+      if (!elevated && !(await supabaseLicenseOwnedByAccount(supabase, current, session.email))) {
+        return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+      }
+
       const { data: deleted, error } = await supabase.from("licenses").delete().eq("id", id).select("*").maybeSingle();
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
       if (!deleted) return NextResponse.json({ message: "License not found" }, { status: 404 });
       await insertLicenseLog({ licenseId: id, action: "delete", ip, metadata: { reason: "deleted_from_dashboard" } });
-      return NextResponse.json({
-        data: {
-          id: deleted.id,
-          name: deleted.name ?? deleted.package_name,
-          packageName: deleted.package_name ?? deleted.name,
-          key: deleted.key,
-          plan: deleted.plan,
-          keyMode: deleted.key_mode ?? "dynamic",
-          status: deleted.status,
-          assignedUser: deleted.assigned_user,
-          deviceId: deleted.device_id,
-          maxDevices: deleted.max_devices,
-          createdAt: deleted.created_at,
-          expiresAt: deleted.expires_at,
-          lastUsedAt: deleted.last_used_at,
-        } satisfies License,
-      });
+      return NextResponse.json({ data: mapSupabaseRowToLicense(deleted as Record<string, unknown>) });
     }
   }
 
   const index = licenses.findIndex((l) => l.id === id);
   if (index < 0) return NextResponse.json({ message: "License not found" }, { status: 404 });
+  const lic = licenses[index];
+  if (!elevated && !mockLicenseVisibleToAccount(lic, session.email)) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
   const [deleted] = licenses.splice(index, 1);
   licenseUsageLogs.push({
     id: `lug_${Date.now()}`,
@@ -476,5 +507,6 @@ export async function DELETE(req: Request) {
     createdAt: new Date().toISOString(),
   });
 
-  return NextResponse.json({ data: deleted });
+  const { ownerEmail: _od, ...pub } = deleted;
+  return NextResponse.json({ data: pub });
 }

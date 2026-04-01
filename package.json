@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "zip:api": "node scripts/build-api-zip.mjs",
+    "prebuild": "node scripts/build-api-zip.mjs",
+    "dev": "node scripts/build-api-zip.mjs && next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -26,7 +28,9 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "archiver": "^7.0.1",
     "@tailwindcss/postcss": "^4",
+    "@types/archiver": "^7.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

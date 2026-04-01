@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# generated each build / dev (source of truth: integration-client/)
+/public/api.zip
+
 # production
 /build
 

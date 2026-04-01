@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
   Bell,
   KeyRound,
@@ -18,6 +19,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { roleMaySeeNavItem } from "@/lib/dashboard-path-policy";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -43,29 +45,33 @@ type MePolicy = {
 function NavLinks({
   pathname,
   onNavigate,
+  role,
 }: {
   pathname: string;
   onNavigate?: () => void;
+  role: string;
 }) {
   return (
     <nav className="space-y-2">
-      {nav.map((item) => {
-        const active = pathname === item.href;
-        const Icon = item.icon;
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            onClick={onNavigate}
-            className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition active:bg-slate-800/80 ${
-              active ? "border-blue-400 bg-blue-500/15 text-blue-200" : "border-transparent hover:border-slate-700 hover:bg-[#121c2e]"
-            }`}
-          >
-            <Icon size={16} className="shrink-0" />
-            <span className="truncate">{item.label}</span>
-          </Link>
-        );
-      })}
+      {nav
+        .filter((item) => roleMaySeeNavItem(role as "owner" | "admin" | "support" | "viewer", item.href))
+        .map((item) => {
+          const active = pathname === item.href;
+          const Icon = item.icon;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              onClick={onNavigate}
+              className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition active:bg-slate-800/80 ${
+                active ? "border-blue-400 bg-blue-500/15 text-blue-200" : "border-transparent hover:border-slate-700 hover:bg-[#121c2e]"
+              }`}
+            >
+              <Icon size={16} className="shrink-0" />
+              <span className="truncate">{item.label}</span>
+            </Link>
+          );
+        })}
     </nav>
   );
 }
@@ -73,6 +79,7 @@ function NavLinks({
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [role, setRole] = useState("viewer");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
@@ -96,6 +103,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     };
     void loadMe();
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get("forbidden") !== "1") return;
+    toast.error("Bạn không có quyền truy cập trang đó.");
+    router.replace("/dashboard", { scroll: false });
+  }, [searchParams, router]);
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -189,7 +202,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <aside className="hidden w-72 shrink-0 border-r bg-[#0a111d]/90 p-5 lg:block">
         {brandBlock}
         {accountBlock}
-        <NavLinks pathname={pathname} />
+        <NavLinks pathname={pathname} role={role} />
         {footerBlock}
       </aside>
 
@@ -216,7 +229,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               {brandBlock}
               {accountBlock}
-              <NavLinks pathname={pathname} onNavigate={closeMobileNav} />
+              <NavLinks pathname={pathname} onNavigate={closeMobileNav} role={role} />
               {footerBlock}
             </div>
           </div>

@@ -10,6 +10,12 @@ const CreatePackageSchema = z.object({
   name: z.string().min(2).max(80),
 });
 
+const PatchPackageSchema = z.object({
+  name: z.string().min(2).max(80),
+  activationUiTitle: z.union([z.string().max(80), z.null()]).optional(),
+  activationUiSubtitle: z.union([z.string().max(160), z.null()]).optional(),
+});
+
 function generatePackageToken() {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let token = "PKG_";
@@ -131,6 +137,8 @@ export async function GET() {
         status: row.status,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        activationUiTitle: row.activation_ui_title ?? null,
+        activationUiSubtitle: row.activation_ui_subtitle ?? null,
       }));
       return NextResponse.json({ data: mapped });
     }
@@ -237,5 +245,64 @@ export async function POST(req: Request) {
   }
   userPackages.unshift(created);
   return NextResponse.json({ data: created }, { status: 201 });
+}
+
+export async function PATCH(req: Request) {
+  const { email, role } = await getAuthContext();
+  const payload = await req.json();
+  const parsed = PatchPackageSchema.safeParse(payload);
+  if (!parsed.success) {
+    return NextResponse.json({ message: "Invalid payload", errors: parsed.error.flatten() }, { status: 400 });
+  }
+  const { name, activationUiTitle, activationUiSubtitle } = parsed.data;
+  const normalized = normalizePackageName(name);
+  if (!normalized) return NextResponse.json({ message: "Invalid package name" }, { status: 400 });
+
+  const elevated = role === "owner" || role === "admin";
+
+  if (isSupabaseEnabled()) {
+    const supabase = getSupabaseAdminClient();
+    if (supabase) {
+      const { data: row, error: fetchErr } = await supabase.from("user_packages").select("*").eq("name", normalized).maybeSingle();
+      if (fetchErr) return NextResponse.json({ message: fetchErr.message }, { status: 500 });
+      if (!row) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+      if (!elevated && String(row.owner_email ?? "").toLowerCase() !== email.toLowerCase()) {
+        return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+      }
+      const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (activationUiTitle !== undefined) updates.activation_ui_title = activationUiTitle;
+      if (activationUiSubtitle !== undefined) updates.activation_ui_subtitle = activationUiSubtitle;
+      const { data: updated, error: upErr } = await supabase
+        .from("user_packages")
+        .update(updates)
+        .eq("name", normalized)
+        .select("*")
+        .single();
+      if (upErr) return NextResponse.json({ message: upErr.message }, { status: 500 });
+      return NextResponse.json({
+        data: {
+          id: updated.id,
+          name: updated.name,
+          token: updated.token,
+          ownerEmail: updated.owner_email,
+          status: updated.status as PackageStatus,
+          createdAt: updated.created_at,
+          updatedAt: updated.updated_at,
+          activationUiTitle: updated.activation_ui_title ?? null,
+          activationUiSubtitle: updated.activation_ui_subtitle ?? null,
+        } satisfies UserPackage,
+      });
+    }
+  }
+
+  const pkg = userPackages.find((p) => p.name === normalized);
+  if (!pkg) return NextResponse.json({ message: "Package not found" }, { status: 404 });
+  if (!elevated && pkg.ownerEmail.toLowerCase() !== email.toLowerCase()) {
+    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  }
+  if (activationUiTitle !== undefined) pkg.activationUiTitle = activationUiTitle ?? undefined;
+  if (activationUiSubtitle !== undefined) pkg.activationUiSubtitle = activationUiSubtitle ?? undefined;
+  pkg.updatedAt = new Date().toISOString();
+  return NextResponse.json({ data: pkg });
 }
 

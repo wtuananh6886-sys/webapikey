@@ -27,7 +27,9 @@ type UserRow = {
   flags: { protectedOwner: boolean; isSelf: boolean };
 };
 
-const emptyPolicy = (role: Role): UserRow["policy"] => ({
+type PolicyShape = NonNullable<UserRow["policy"]>;
+
+const emptyPolicy = (role: Role): PolicyShape => ({
   assignedPlan: role === "owner" || role === "admin" ? "premium" : "basic",
   monthlyPackageTokenLimit: role === "owner" || role === "admin" ? 99999 : 3,
   monthlyKeyLimit: role === "owner" || role === "admin" ? 999999 : 30,
@@ -43,6 +45,9 @@ export function UsersManager() {
   const [forbidden, setForbidden] = useState(false);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<UserRow | null>(null);
+  /** String drafts so users can clear the field and type a new number without "010" glitches. */
+  const [pkgLimitStr, setPkgLimitStr] = useState("");
+  const [keyLimitStr, setKeyLimitStr] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
 
@@ -80,16 +85,25 @@ export function UsersManager() {
   }, [rows, search]);
 
   const openEdit = (row: UserRow) => {
-    setEditing({
-      ...row,
-      policy: row.policy ?? emptyPolicy(row.role),
-    });
+    const pol = row.policy ?? emptyPolicy(row.role);
+    setEditing({ ...row, policy: pol });
+    setPkgLimitStr(String(pol.monthlyPackageTokenLimit));
+    setKeyLimitStr(String(pol.monthlyKeyLimit));
+  };
+
+  const parseQuota = (raw: string) => {
+    const t = raw.trim();
+    if (t === "") return 0;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
   };
 
   const saveEdit = async () => {
     if (!editing?.policy) return;
     setSaving(true);
     const p = editing.policy;
+    const monthlyPackageTokenLimit = parseQuota(pkgLimitStr);
+    const monthlyKeyLimit = parseQuota(keyLimitStr);
     const res = await fetch("/api/admin/users", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -98,8 +112,8 @@ export function UsersManager() {
         role: editing.role,
         status: editing.status,
         assignedPlan: p.assignedPlan,
-        monthlyPackageTokenLimit: p.monthlyPackageTokenLimit,
-        monthlyKeyLimit: p.monthlyKeyLimit,
+        monthlyPackageTokenLimit,
+        monthlyKeyLimit,
         expiresAt: p.expiresAt ? new Date(p.expiresAt).toISOString() : null,
       }),
     });
@@ -329,32 +343,23 @@ export function UsersManager() {
                 <div>
                   <label className="mb-1 block text-xs text-slate-400">Packages / month</label>
                   <Input
-                    type="number"
-                    min={0}
-                    value={editing.policy.monthlyPackageTokenLimit}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        policy: {
-                          ...editing.policy!,
-                          monthlyPackageTokenLimit: Number(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="0"
+                    value={pkgLimitStr}
+                    onChange={(e) => setPkgLimitStr(e.target.value.replace(/\D/g, ""))}
                   />
                 </div>
                 <div>
                   <label className="mb-1 block text-xs text-slate-400">Keys / month</label>
                   <Input
-                    type="number"
-                    min={0}
-                    value={editing.policy.monthlyKeyLimit}
-                    onChange={(e) =>
-                      setEditing({
-                        ...editing,
-                        policy: { ...editing.policy!, monthlyKeyLimit: Number(e.target.value) || 0 },
-                      })
-                    }
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="0"
+                    value={keyLimitStr}
+                    onChange={(e) => setKeyLimitStr(e.target.value.replace(/\D/g, ""))}
                   />
                 </div>
               </div>

@@ -33,17 +33,21 @@ Open `http://localhost:3000`.
 ## Core routes
 
 - `/login`
-- `/dashboard`
-- `/dashboard/licenses`
-- `/dashboard/servers`
-- `/dashboard/tweaks`
-- `/dashboard/admins`
-- `/dashboard/logs`
-- `/dashboard/settings`
+- `/dashboard` — Overview
+- `/dashboard/licenses` — Keys (owner / admin / support)
+- `/dashboard/servers`, `/dashboard/tweaks` — support+ and above
+- `/dashboard/users` — registered accounts (owner / admin)
+- `/dashboard/admins` — Policies (owner / admin)
+- `/dashboard/logs` — all signed-in roles (viewer = logs + overview only)
+- `/dashboard/settings` — owner / admin
+
+Route access is enforced in **proxy** (`proxy.ts`, Next.js 16) by role; API `/api/licenses` requires a session and scopes rows by `owner_email` for non-admin users.
 
 ## License verification API for ImGui
 
 `POST /api/licenses/verify`
+
+Branding man hinh nhap key (title/subtitle theo package): `POST /api/licenses/activation-ui` + cau hinh tren `Dashboard -> Licenses`. Client zip: **`/api.zip`** = `public/api.zip` tao boi `prebuild` / `npm run zip:api` tu `integration-client` + `docs`.
 
 Payload:
 

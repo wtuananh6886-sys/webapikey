@@ -1,4 +1,10 @@
 import { NextResponse } from "next/server";
+import {
+  getLicenseSessionSecret,
+  licenseSessionTtlSec,
+  signLicenseSessionJwt,
+} from "@/lib/license-session-jwt";
+import { getActivationBrandingByPackageName } from "@/lib/package-activation-ui";
 import { licenses, licenseUsageLogs } from "@/lib/mock-data";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
@@ -247,11 +253,23 @@ export async function POST(req: Request) {
       metadata: { packageId: body.packageId ?? null, appVersion: body.appVersion ?? null },
     });
 
+    const sessionSecret = getLicenseSessionSecret();
+    const ttl = licenseSessionTtlSec();
+    const sessionToken =
+      sessionSecret ? signLicenseSessionJwt({ lid: license.id, did: body.deviceId }, sessionSecret, ttl) : undefined;
+
+    const branding = await getActivationBrandingByPackageName(license.packageName ?? "");
+
     return NextResponse.json({
       ok: true,
       plan: license.plan,
       packageName: license.packageName,
       expiresAt: license.expiresAt,
+      uiTitle: branding.uiTitle,
+      uiSubtitle: branding.uiSubtitle,
+      ...(sessionToken
+        ? { sessionToken, sessionExpiresInSec: ttl, sessionHint: "POST /api/licenses/session with Bearer before expiry" }
+        : {}),
       featureFlags: {
         allowAimAssist: true,
         allowSkinBypass: license.plan !== "basic",
