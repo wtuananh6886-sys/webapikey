@@ -15,6 +15,7 @@ import {
   Settings,
   ShieldUser,
   Telescope,
+  Users,
   X,
 } from "lucide-react";
 
@@ -23,7 +24,8 @@ const nav = [
   { href: "/dashboard/licenses", label: "Licenses", icon: KeyRound },
   { href: "/dashboard/servers", label: "Servers", icon: Server },
   { href: "/dashboard/tweaks", label: "Tweaks", icon: Package },
-  { href: "/dashboard/admins", label: "Admins", icon: ShieldUser },
+  { href: "/dashboard/users", label: "Users", icon: Users },
+  { href: "/dashboard/admins", label: "Policies", icon: ShieldUser },
   { href: "/dashboard/logs", label: "Activity Logs", icon: Telescope },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
