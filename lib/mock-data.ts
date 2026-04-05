@@ -99,19 +99,23 @@ export const admins: AdminUser[] = [
   },
 ];
 
+/** Chỉ dùng khi không bật Supabase. Mật khẩu lấy từ DEV_MOCK_ADMIN_PASSWORD — không hardcode trong repo. */
 export const adminCredentials: Array<{
   email: string;
   password: string;
   username: string;
   role: "owner" | "admin" | "support" | "viewer";
-}> = [
-  {
-    email: "wtuananh6886@gmail.com",
-    password: "Wtuananh@123",
-    username: "wtuananh6886-sys",
-    role: "owner",
-  },
-];
+}> =
+  typeof process !== "undefined" && process.env.DEV_MOCK_ADMIN_PASSWORD
+    ? [
+        {
+          email: "wtuananh6886@gmail.com",
+          password: process.env.DEV_MOCK_ADMIN_PASSWORD,
+          username: "wtuananh6886-sys",
+          role: "owner",
+        },
+      ]
+    : [];
 
 export const logs: ActivityLog[] = [
   {

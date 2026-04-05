@@ -1,5 +1,5 @@
 {
-  "name": "webapikey",
+  "name": "nexora-api",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -8,7 +8,9 @@
     "dev": "node scripts/build-api-zip.mjs && next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "hash-password": "node scripts/print-scrypt.mjs",
+    "verify-password": "node scripts/verify-scrypt.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
@@ -16,6 +18,7 @@
     "@tanstack/react-table": "^8.21.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "jose": "^5.10.0",
     "lucide-react": "^1.7.0",
     "next": "16.2.1",
     "next-themes": "^0.4.6",
@@ -28,12 +31,12 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "archiver": "^7.0.1",
     "@tailwindcss/postcss": "^4",
     "@types/archiver": "^7.0.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "archiver": "^7.0.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "tailwindcss": "^4",

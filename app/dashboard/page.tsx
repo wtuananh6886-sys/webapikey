@@ -33,7 +33,7 @@ export default function DashboardPage() {
                 <p className="text-xs font-medium text-slate-400">{it.label}</p>
                 <p className="mt-2 text-2xl font-semibold tabular-nums tracking-tight text-white sm:text-3xl">{it.value}</p>
               </div>
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-blue-500/15 text-blue-300 ring-1 ring-blue-400/20">
+              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[var(--accent-subtle)] text-[var(--accent)] ring-1 ring-[var(--accent)]/20">
                 <it.icon size={22} aria-hidden />
               </div>
             </div>
@@ -50,7 +50,7 @@ export default function DashboardPage() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#243249" />
                 <XAxis dataKey="d" stroke="#7c8ca8" />
                 <Tooltip />
-                <Area type="monotone" dataKey="v" stroke="#4f9cff" fill="#4f9cff30" />
+                <Area type="monotone" dataKey="v" stroke="#6d8cff" fill="rgba(109,140,255,0.2)" />
               </AreaChart>
             </ResponsiveContainer>
           </div>

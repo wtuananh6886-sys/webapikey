@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getLicenseKeyPepper, hashLicenseKey } from "@/lib/license-key-crypto";
 import {
   getLicenseSessionSecret,
   licenseSessionTtlSec,
@@ -7,6 +8,7 @@ import {
 import { getActivationBrandingByPackageName } from "@/lib/package-activation-ui";
 import { licenses, licenseUsageLogs } from "@/lib/mock-data";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
+import type { License } from "@/types/domain";
 
 type VerifyPayload = {
   licenseKey: string;
@@ -77,25 +79,34 @@ export async function POST(req: Request) {
 
     const supabase = isSupabaseEnabled() ? getSupabaseAdminClient() : null;
     const lookupKey = body.licenseKey.trim();
-    let license =
-      licenses.find((it) => it.key === lookupKey) ?? null;
+    let license: License | null = licenses.find((it) => it.key === lookupKey) ?? null;
     if (supabase) {
-      const { data } = await supabase.from("licenses").select("*").eq("key", lookupKey).maybeSingle();
+      const pepper = getLicenseKeyPepper();
+      let data: Record<string, unknown> | null = null;
+      if (pepper) {
+        const h = hashLicenseKey(lookupKey, pepper);
+        const res = await supabase.from("licenses").select("*").eq("key_hash", h).maybeSingle();
+        data = (res.data as Record<string, unknown> | null) ?? null;
+      }
+      if (!data) {
+        const res = await supabase.from("licenses").select("*").eq("key", lookupKey).maybeSingle();
+        data = (res.data as Record<string, unknown> | null) ?? null;
+      }
       if (data) {
         license = {
-          id: data.id,
-          name: data.name ?? data.package_name ?? "unknown-package",
-          packageName: data.package_name ?? data.name ?? "unknown-package",
-          key: data.key,
-          plan: data.plan,
-          keyMode: data.key_mode ?? "dynamic",
-          status: data.status,
-          assignedUser: data.assigned_user,
-          deviceId: data.device_id,
-          maxDevices: data.max_devices,
-          createdAt: data.created_at,
-          expiresAt: data.expires_at,
-          lastUsedAt: data.last_used_at,
+          id: data.id as string,
+          name: (data.name ?? data.package_name ?? "unknown-package") as string,
+          packageName: (data.package_name ?? data.name ?? "unknown-package") as string,
+          key: (data.key as string) ?? "",
+          plan: data.plan as License["plan"],
+          keyMode: ((data.key_mode as License["keyMode"]) ?? "dynamic") as License["keyMode"],
+          status: data.status as License["status"],
+          assignedUser: data.assigned_user as string | null,
+          deviceId: data.device_id as string | null,
+          maxDevices: data.max_devices as number,
+          createdAt: data.created_at as string,
+          expiresAt: data.expires_at as string,
+          lastUsedAt: (data.last_used_at as string | null) ?? null,
         };
       }
     }

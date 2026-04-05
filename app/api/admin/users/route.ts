@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { z } from "zod";
 import { mapPolicyRowToApi, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, adminCredentials, admins } from "@/lib/mock-data";
+import { getWaSession } from "@/lib/session-cookies";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 import type { AccountPolicy, AdminStatus, LicensePlan, Role } from "@/types/domain";
 
@@ -20,12 +20,10 @@ const DeleteUserSchema = z.object({
   email: z.string().email(),
 });
 
-async function getAuth() {
-  const cookieStore = await cookies();
-  return {
-    role: cookieStore.get("wa_role")?.value ?? "viewer",
-    email: (cookieStore.get("wa_email")?.value ?? "").toLowerCase(),
-  };
+async function requireSession() {
+  const s = await getWaSession();
+  if (!s) return null;
+  return { role: s.role, email: s.email.toLowerCase() };
 }
 
 function isPrivileged(role: string) {
@@ -88,7 +86,9 @@ function buildMockUserList(requesterEmail: string) {
 }
 
 export async function GET() {
-  const { role, email: requesterEmail } = await getAuth();
+  const auth = await requireSession();
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { role, email: requesterEmail } = auth;
   if (!isPrivileged(role)) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
@@ -196,7 +196,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
-  const { role: actorRole, email: actorEmail } = await getAuth();
+  const auth = await requireSession();
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { role: actorRole, email: actorEmail } = auth;
   if (!isPrivileged(actorRole)) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
@@ -342,7 +344,9 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const { role: actorRole, email: actorEmail } = await getAuth();
+  const auth = await requireSession();
+  if (!auth) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { role: actorRole, email: actorEmail } = auth;
   if (!isOwner(actorRole)) {
     return NextResponse.json({ message: "Only owner can delete accounts" }, { status: 403 });
   }

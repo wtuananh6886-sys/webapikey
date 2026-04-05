@@ -18,7 +18,7 @@ export default function SettingsPage() {
   const { register, handleSubmit, formState } = useForm<SettingsForm>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
-      appName: "WebAPIKey Admin",
+      appName: "Nexora-API",
       heartbeatInterval: 30,
       notifyEmail: "ops@aovpro.com",
     },

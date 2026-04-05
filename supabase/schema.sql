@@ -51,6 +51,7 @@ $$;
 create table if not exists users (
   id uuid primary key default gen_random_uuid(),
   email text not null unique,
+  password_hash text,
   created_at timestamptz not null default now()
 );
 
@@ -69,7 +70,9 @@ create table if not exists licenses (
   id uuid primary key default gen_random_uuid(),
   name text,
   package_name text,
-  key text not null unique,
+  key text unique,
+  key_hash text,
+  key_prefix text,
   plan text not null,
   key_mode text not null default 'dynamic',
   status license_status not null default 'inactive',
@@ -97,6 +100,11 @@ alter table licenses add column if not exists name text;
 alter table licenses add column if not exists package_name text;
 alter table licenses add column if not exists key_mode text default 'dynamic';
 alter table licenses add column if not exists owner_email text;
+alter table licenses add column if not exists key_hash text;
+alter table licenses add column if not exists key_prefix text;
+alter table licenses alter column key drop not null;
+create unique index if not exists licenses_key_hash_uidx on licenses (key_hash) where key_hash is not null;
+alter table users add column if not exists password_hash text;
 alter table user_packages add column if not exists token text;
 alter table user_packages add column if not exists activation_ui_title text;
 alter table user_packages add column if not exists activation_ui_subtitle text;
@@ -104,7 +112,7 @@ alter table user_packages add column if not exists archived_at timestamptz;
 
 create table if not exists license_logs (
   id uuid primary key default gen_random_uuid(),
-  license_id uuid not null references licenses(id) on delete cascade,
+  license_id uuid references licenses(id) on delete set null,
   action text not null,
   ip_address text,
   user_agent text,

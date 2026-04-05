@@ -1,4 +1,4 @@
-# WebAPIKey Admin Dashboard
+# Nexora-API — Admin / License console
 
 Premium dark admin dashboard for:
 

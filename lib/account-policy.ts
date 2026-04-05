@@ -11,8 +11,11 @@ export function monthTag() {
 }
 
 /**
- * After login: sync role only. Never inflate quotas when someone becomes admin.
- * New row: basic 3 / 30 keys per month.
+ * Sau đăng nhập: tạo dòng `account_policies` nếu chưa có (gói basic + role từ profile).
+ *
+ * **Không** cập nhật `role` khi dòng đã tồn tại — tránh mỗi lần login ghi đè owner bạn sửa tay
+ * trên Table Editor xuống `viewer` chỉ vì `admin_profiles.role` còn viewer.
+ * Đổi quyền: Dashboard → Users / Policies hoặc sửa cả hai bảng cho khớp.
  */
 export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email: string, role: Role) {
   const normalized = email.toLowerCase().trim();
@@ -21,7 +24,7 @@ export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email
 
   const { data: existing, error: readErr } = await supabase
     .from("account_policies")
-    .select("*")
+    .select("id")
     .eq("email", normalized)
     .maybeSingle();
   if (readErr) throw readErr;
@@ -40,17 +43,7 @@ export async function ensureAccountPolicyOnLogin(supabase: SupabaseClient, email
       updated_at: new Date().toISOString(),
     });
     if (error) throw error;
-    return;
   }
-
-  const { error: updErr } = await supabase
-    .from("account_policies")
-    .update({
-      role,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("email", normalized);
-  if (updErr) throw updErr;
 }
 
 /**

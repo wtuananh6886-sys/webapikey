@@ -1,23 +1,63 @@
 @import "tailwindcss";
 
+/* Nexora-API — celestial / fantasy-premium (inspired mood: elegant RPG promo sites; không dùng asset IP bên thứ ba) */
 :root {
-  --background: #090d14;
-  --foreground: #e6edf7;
-  --card: #0e1420;
-  --muted: #131c2b;
-  --border: #1c2638;
-  --primary: #4f9cff;
-  --primary-glow: rgba(79, 156, 255, 0.22);
-  --surface-glass: rgba(14, 20, 32, 0.72);
+  --background: #071018;
+  --foreground: #f5ecd8;
+  --foreground-secondary: #d4c4a8;
+  --foreground-muted: #8a9ba8;
+  --card: #0c1824;
+  --muted: #122535;
+  --surface-subtle: rgba(18, 37, 53, 0.72);
+  --surface-elevated: rgba(12, 24, 36, 0.94);
+  --surface-panel: rgba(8, 20, 32, 0.92);
+  --surface-input: rgba(5, 14, 24, 0.96);
+  --surface-hover: rgba(30, 55, 72, 0.55);
+
+  --border-subtle: rgba(212, 175, 120, 0.12);
+  --border-default: rgba(212, 175, 120, 0.2);
+  --border-strong: rgba(230, 200, 140, 0.35);
+  --border-glow: rgba(255, 220, 160, 0.45);
+
+  /* Vàng kem + teal — điểm nhấn */
+  --accent: #e8c078;
+  --accent-deep: #b8893a;
+  --accent-hover: #f0d49a;
+  --accent-subtle: rgba(232, 192, 120, 0.12);
+  --accent-glow: rgba(232, 192, 120, 0.35);
+  --accent-ring: rgba(232, 192, 120, 0.28);
+  --accent-ring-strong: rgba(255, 220, 170, 0.5);
+  --teal: #5ad4c4;
+  --teal-subtle: rgba(90, 212, 196, 0.14);
+
+  --glow-a: rgba(90, 140, 200, 0.18);
+  --glow-b: rgba(90, 212, 196, 0.1);
+  --glow-c: rgba(232, 192, 120, 0.08);
+
+  --primary: var(--accent);
+  --primary-glow: var(--accent-glow);
+  --border: var(--border-default);
+  --surface-glass: var(--surface-panel);
+
+  --danger: #f0a0a0;
+
+  --radius-card: 1rem;
+  --radius-panel: 1.125rem;
   --radius-lg: 1rem;
-  --radius-xl: 1.25rem;
-  --shadow-card: 0 12px 40px rgba(0, 0, 0, 0.35);
-  --shadow-card-hover: 0 18px 50px rgba(0, 0, 0, 0.42);
+  --radius-xl: 1.125rem;
+
+  --shadow-card:
+    0 0 0 1px rgba(212, 175, 120, 0.08) inset, 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 48px rgba(0, 0, 0, 0.45);
+  --shadow-card-hover:
+    0 0 0 1px rgba(232, 192, 120, 0.15) inset, 0 20px 56px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 12px 40px rgba(0, 0, 0, 0.35);
+  --shadow-elevated: 0 28px 72px rgba(0, 0, 0, 0.55);
+
   --ease-out-expo: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 * {
-  border-color: var(--border);
+  border-color: var(--border-default);
 }
 
 html {
@@ -38,8 +78,10 @@ body {
 body {
   background-color: var(--background);
   background-image:
-    radial-gradient(ellipse 120% 80% at 50% -30%, rgba(56, 120, 200, 0.14), transparent 55%),
-    radial-gradient(circle at 0% 0%, #111f36 0%, #090d14 50%);
+    radial-gradient(ellipse 130% 90% at 50% -40%, var(--glow-a), transparent 58%),
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(90, 212, 196, 0.06), transparent 45%),
+    radial-gradient(circle at 0% 100%, rgba(184, 137, 58, 0.06), transparent 40%),
+    linear-gradient(180deg, #050c14 0%, var(--background) 35%, #050a10 100%);
   background-attachment: fixed;
   color: var(--foreground);
   font-family: var(--font-geist-sans), Inter, system-ui, sans-serif;
@@ -49,16 +91,36 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* “Sao” rất nhẹ — không gây nhiễu đọc */
+body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  opacity: 0.35;
+  background-image: radial-gradient(1px 1px at 20% 30%, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 70% 20%, rgba(255, 255, 255, 0.25), transparent),
+    radial-gradient(1px 1px at 40% 80%, rgba(90, 212, 196, 0.4), transparent),
+    radial-gradient(1px 1px at 90% 60%, rgba(255, 255, 255, 0.2), transparent);
+  background-size: 100% 100%;
+}
+
+.font-display {
+  font-family: var(--font-display), "Cormorant Garamond", Georgia, serif;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 ::selection {
-  background: rgba(79, 156, 255, 0.35);
+  background: rgba(232, 192, 120, 0.35);
   color: #fff;
 }
 
-/* Thin scrollbar — desktop */
 @media (min-width: 1024px) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(100, 116, 139, 0.45) transparent;
+    scrollbar-color: rgba(180, 160, 120, 0.35) transparent;
   }
 
   *::-webkit-scrollbar {
@@ -67,22 +129,50 @@ body {
   }
 
   *::-webkit-scrollbar-thumb {
-    background: rgba(100, 116, 139, 0.45);
+    background: rgba(180, 160, 120, 0.35);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: rgba(100, 116, 139, 0.65);
+    background: rgba(200, 180, 140, 0.5);
     background-clip: padding-box;
   }
+}
+
+/* Khung panel kiểu “banner game” — viền vàng kép mềm */
+.nexora-frame {
+  position: relative;
+  border-radius: var(--radius-panel);
+  background: linear-gradient(145deg, rgba(18, 35, 50, 0.95), rgba(8, 18, 28, 0.98));
+  box-shadow: var(--shadow-elevated), 0 0 0 1px rgba(232, 192, 120, 0.12), 0 0 40px rgba(232, 192, 120, 0.06);
+}
+
+.nexora-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(232, 192, 120, 0.55), rgba(90, 212, 196, 0.25), rgba(232, 192, 120, 0.35));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.nexora-mark {
+  background: linear-gradient(145deg, #f0d49a 0%, #c9a04a 45%, #8b6914 100%);
+  box-shadow: 0 0 24px rgba(232, 192, 120, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  color: #1a1208;
 }
 
 @keyframes dashboard-page-enter {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -91,13 +181,13 @@ body {
 }
 
 .dashboard-page-enter {
-  animation: dashboard-page-enter 0.42s var(--ease-out-expo) both;
+  animation: dashboard-page-enter 0.4s var(--ease-out-expo) both;
 }
 
 @keyframes auth-card-enter {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.98);
+    transform: translateY(14px) scale(0.99);
   }
   to {
     opacity: 1;
@@ -106,13 +196,13 @@ body {
 }
 
 .auth-card-enter {
-  animation: auth-card-enter 0.5s var(--ease-out-expo) both;
+  animation: auth-card-enter 0.52s var(--ease-out-expo) both;
 }
 
 @keyframes mobile-nav-in {
   from {
     transform: translateX(-100%);
-    opacity: 0.92;
+    opacity: 0.94;
   }
   to {
     transform: translateX(0);
@@ -121,7 +211,7 @@ body {
 }
 
 .mobile-nav-panel {
-  animation: mobile-nav-in 0.3s var(--ease-out-expo) both;
+  animation: mobile-nav-in 0.28s var(--ease-out-expo) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -132,8 +222,11 @@ body {
   }
 }
 
-/* Focus ring helper for custom interactive regions */
 .focus-ring:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--primary);
+  box-shadow: 0 0 0 2px var(--background), 0 0 0 4px var(--accent);
+}
+
+.auth-aside-title {
+  font-feature-settings: "ss01" on, "cv02" on;
 }

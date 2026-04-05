@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { ensureAccountPolicyRow, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
+import {
+  getLicenseKeyPepper,
+  hashLicenseKey,
+  licenseKeyPrefix,
+  maskLicenseKeyForApi,
+} from "@/lib/license-key-crypto";
 import { accountPolicies, licenses, licenseUsageLogs, userPackages } from "@/lib/mock-data";
+import { randomAlphanum } from "@/lib/secure-random";
 import { getWaSession, isLicenseElevatedRole } from "@/lib/session-cookies";
 import type { AccountPolicy, License, Role } from "@/types/domain";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
@@ -55,7 +62,7 @@ const DeleteLicenseSchema = z.object({
 });
 
 function generateLicenseKey() {
-  const seg = () => Math.random().toString(36).slice(2, 6).toUpperCase();
+  const seg = () => randomAlphanum(4);
   return `AOVP-${seg()}-${seg()}-${seg()}`;
 }
 
@@ -68,12 +75,7 @@ function normalizePackageName(input: string) {
 
 function generatePackageBoundLicenseKey(packageName: string, durationDays: number) {
   const normalized = normalizePackageName(packageName) || "default-package";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let token = "";
-  for (let i = 0; i < 6; i += 1) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return `${normalized}-${durationDays}day-${token}`;
+  return `${normalized}-${durationDays}day-${randomAlphanum(6)}`;
 }
 
 function keyMatchesFormat(key: string, packageName: string, durationDays: number) {
@@ -178,12 +180,17 @@ async function insertLicenseLog(params: {
   });
 }
 
-function mapSupabaseRowToLicense(row: Record<string, unknown>): License {
+function mapSupabaseRowToLicense(row: Record<string, unknown>, options?: { plaintextKeyOverride?: string }): License {
+  const legacyKey = row.key != null && String(row.key).length > 0 ? String(row.key) : "";
+  const prefix = row.key_prefix != null ? String(row.key_prefix) : legacyKey ? licenseKeyPrefix(legacyKey) : "";
+  const key =
+    options?.plaintextKeyOverride ??
+    (legacyKey.length > 0 ? maskLicenseKeyForApi(legacyKey) : prefix.length > 0 ? `${prefix}••••••` : "••••••••");
   return {
     id: String(row.id),
     name: (row.name as string) ?? (row.package_name as string) ?? "unknown-package",
     packageName: (row.package_name as string) ?? (row.name as string) ?? "unknown-package",
-    key: row.key as string,
+    key,
     plan: row.plan as License["plan"],
     keyMode: (row.key_mode as License["keyMode"]) ?? "dynamic",
     status: row.status as License["status"],
@@ -240,7 +247,10 @@ export async function GET() {
 
   const list = elevated ? licenses : licenses.filter((lic) => mockLicenseVisibleToAccount(lic, session.email));
   return NextResponse.json({
-    data: list.map(({ ownerEmail: _o, ...pub }) => pub),
+    data: list.map(({ ownerEmail: _o, ...pub }) => ({
+      ...pub,
+      key: maskLicenseKeyForApi(pub.key),
+    })),
   });
 }
 
@@ -351,26 +361,35 @@ export async function POST(req: Request) {
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
-      const { data: inserted, error } = await supabase
-        .from("licenses")
-        .insert({
-          name: newLicense.name,
-          package_name: newLicense.packageName,
-          key: newLicense.key,
-          plan: newLicense.plan,
-          key_mode: newLicense.keyMode,
-          status: newLicense.status,
-          assigned_user: newLicense.assignedUser,
-          device_id: newLicense.deviceId,
-          max_devices: newLicense.maxDevices,
-          expires_at: newLicense.expiresAt,
-          last_used_at: newLicense.lastUsedAt,
-          owner_email: email,
-        })
-        .select("*")
-        .single();
+      const pepper = getLicenseKeyPepper();
+      const insertRow: Record<string, unknown> = {
+        name: newLicense.name,
+        package_name: newLicense.packageName,
+        plan: newLicense.plan,
+        key_mode: newLicense.keyMode,
+        status: newLicense.status,
+        assigned_user: newLicense.assignedUser,
+        device_id: newLicense.deviceId,
+        max_devices: newLicense.maxDevices,
+        expires_at: newLicense.expiresAt,
+        last_used_at: newLicense.lastUsedAt,
+        owner_email: email,
+      };
+      if (pepper) {
+        insertRow.key = null;
+        insertRow.key_hash = hashLicenseKey(finalKey, pepper);
+        insertRow.key_prefix = licenseKeyPrefix(finalKey);
+      } else {
+        insertRow.key = finalKey;
+      }
+      const { data: inserted, error } = await supabase.from("licenses").insert(insertRow).select("*").single();
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-      return NextResponse.json({ data: mapSupabaseRowToLicense(inserted as Record<string, unknown>) }, { status: 201 });
+      return NextResponse.json(
+        {
+          data: mapSupabaseRowToLicense(inserted as Record<string, unknown>, { plaintextKeyOverride: finalKey }),
+        },
+        { status: 201 }
+      );
     }
   }
 
@@ -569,10 +588,10 @@ export async function DELETE(req: Request) {
         return NextResponse.json({ message: "Forbidden" }, { status: 403 });
       }
 
+      await insertLicenseLog({ licenseId: id, action: "delete", ip, metadata: { reason: "deleted_from_dashboard" } });
       const { data: deleted, error } = await supabase.from("licenses").delete().eq("id", id).select("*").maybeSingle();
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
       if (!deleted) return NextResponse.json({ message: "License not found" }, { status: 404 });
-      await insertLicenseLog({ licenseId: id, action: "delete", ip, metadata: { reason: "deleted_from_dashboard" } });
       return NextResponse.json({ data: mapSupabaseRowToLicense(deleted as Record<string, unknown>) });
     }
   }
@@ -595,5 +614,5 @@ export async function DELETE(req: Request) {
   });
 
   const { ownerEmail: _od, ...pub } = deleted;
-  return NextResponse.json({ data: pub });
+  return NextResponse.json({ data: { ...pub, key: maskLicenseKeyForApi(pub.key) } });
 }

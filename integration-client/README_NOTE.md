@@ -69,13 +69,15 @@ Neu thieu doan nay, key UI hien nhung menu van co the mo.
 
 ## 3) Config host verify API
 
+**Sản phẩm web:** Nexora-API (tên hiển thị). URL deploy Vercel có thể giữ subdomain cũ hoặc đổi theo domain mới — chỉ cần trùng với server đang chạy API.
+
 Trong `AOVLicenseGateManager.mm`:
 
 ```objc
 NSString *host = NSSENCRYPT("https://webapikey-sable.vercel.app");
 ```
 
-Doi thanh host/domain cua ban.
+Đổi thành host/domain bạn deploy (ví dụ sau khi đổi tên project Vercel).
 
 ---
 

@@ -1,12 +1,9 @@
-import { cookies } from "next/headers";
 import type { Role } from "@/types/domain";
+import { getWaSession } from "@/lib/session-cookies";
 
 export async function getSessionRole(): Promise<Role | null> {
-  const cookieStore = await cookies();
-  const raw = cookieStore.get("wa_role")?.value ?? null;
-  if (!raw) return null;
-  if (raw === "owner" || raw === "admin" || raw === "support" || raw === "viewer") return raw;
-  return null;
+  const s = await getWaSession();
+  return s?.role ?? null;
 }
 
 /** Align with `lib/dashboard-path-policy.ts` (middleware + sidebar). */

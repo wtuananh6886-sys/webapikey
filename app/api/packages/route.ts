@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { z } from "zod";
 import { ensureAccountPolicyRow, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, userPackages } from "@/lib/mock-data";
 import type { AccountPolicy, PackageStatus, Role, UserPackage } from "@/types/domain";
+import { getWaSession } from "@/lib/session-cookies";
+import { randomAlphanum } from "@/lib/secure-random";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
 const CreatePackageSchema = z.object({
@@ -19,12 +20,7 @@ const PatchPackageSchema = z.object({
 });
 
 function generatePackageToken() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let token = "PKG_";
-  for (let i = 0; i < 16; i += 1) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return token;
+  return `PKG_${randomAlphanum(16)}`;
 }
 
 function normalizePackageName(input: string) {
@@ -34,11 +30,10 @@ function normalizePackageName(input: string) {
     .replace(/^-+|-+$/g, "");
 }
 
-async function getAuthContext() {
-  const cookieStore = await cookies();
-  const role = cookieStore.get("wa_role")?.value ?? "viewer";
-  const email = (cookieStore.get("wa_email")?.value ?? "viewer@local").toLowerCase();
-  return { role, email };
+async function requirePackageSession() {
+  const s = await getWaSession();
+  if (!s) return null;
+  return { role: s.role, email: s.email.toLowerCase() };
 }
 
 function parseRole(raw: string | undefined): Role {
@@ -108,7 +103,9 @@ async function consumePackageTokenQuota(email: string, role: Role) {
 }
 
 export async function GET() {
-  const { role, email } = await getAuthContext();
+  const ctx = await requirePackageSession();
+  if (!ctx) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { role, email } = ctx;
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
@@ -173,7 +170,9 @@ export async function POST(req: Request) {
       { status: 503 }
     );
   }
-  const { email, role } = await getAuthContext();
+  const ctx = await requirePackageSession();
+  if (!ctx) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { email, role } = ctx;
   const payload = await req.json();
   const parsed = CreatePackageSchema.safeParse(payload);
   if (!parsed.success) {
@@ -279,7 +278,9 @@ export async function PATCH(req: Request) {
       { status: 503 }
     );
   }
-  const { email, role } = await getAuthContext();
+  const ctx = await requirePackageSession();
+  if (!ctx) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { email, role } = ctx;
   const payload = await req.json();
   const parsed = PatchPackageSchema.safeParse(payload);
   if (!parsed.success) {
@@ -440,7 +441,9 @@ export async function DELETE(req: Request) {
       { status: 503 }
     );
   }
-  const { email, role } = await getAuthContext();
+  const ctx = await requirePackageSession();
+  if (!ctx) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  const { email, role } = ctx;
   if (role !== "owner" && role !== "admin") {
     return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được gỡ package" }, { status: 403 });
   }

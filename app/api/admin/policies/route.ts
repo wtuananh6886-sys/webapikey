@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { z } from "zod";
 import { mapPolicyRowToApi, monthTag, quotaForAssignedPlan } from "@/lib/account-policy";
 import { accountPolicies, admins } from "@/lib/mock-data";
+import { getWaSession } from "@/lib/session-cookies";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 import type { AccountPolicy, AdminUser, LicensePlan, Role } from "@/types/domain";
 
@@ -14,9 +14,9 @@ const UpdatePolicySchema = z.object({
   expiresAt: z.string().datetime().nullable().optional(),
 });
 
-async function getRole() {
-  const cookieStore = await cookies();
-  return cookieStore.get("wa_role")?.value ?? "viewer";
+async function getAuthedRole(): Promise<Role | null> {
+  const s = await getWaSession();
+  return s?.role ?? null;
 }
 
 function isPrivileged(role: string) {
@@ -55,7 +55,8 @@ function mergeAdminsWithDb(
 }
 
 export async function GET() {
-  const role = await getRole();
+  const role = await getAuthedRole();
+  if (!role) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   if (!isPrivileged(role)) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }
@@ -126,7 +127,8 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
-  const role = await getRole();
+  const role = await getAuthedRole();
+  if (!role) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   if (!isPrivileged(role)) {
     return NextResponse.json({ message: "Forbidden" }, { status: 403 });
   }

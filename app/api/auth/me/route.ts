@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { accountPolicies, adminCredentials, admins, userPackages } from "@/lib/mock-data";
 import { mapPolicyRowToApi } from "@/lib/account-policy";
+import { accountPolicies, adminCredentials, admins, userPackages } from "@/lib/mock-data";
+import { getWaSession } from "@/lib/session-cookies";
 import { getSupabaseAdminClient, isSupabaseEnabled } from "@/lib/supabase";
 
 function slugifyPackageName(input: string) {
@@ -13,10 +13,12 @@ function slugifyPackageName(input: string) {
 }
 
 export async function GET() {
-  const cookieStore = await cookies();
-  const role = cookieStore.get("wa_role")?.value ?? "viewer";
-  const email = cookieStore.get("wa_email")?.value ?? "viewer@local";
-  let username = cookieStore.get("wa_username")?.value?.trim() ?? null;
+  const session = await getWaSession();
+  if (!session) {
+    return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+  }
+  const { role, email, username: sessionUsername } = session;
+  let username = sessionUsername;
   if (!username) {
     const cred = adminCredentials.find((c) => c.email.toLowerCase() === email.toLowerCase());
     username = cred?.username ?? email.split("@")[0] ?? "user";

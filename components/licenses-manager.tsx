@@ -153,7 +153,11 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
   });
 
   const refreshAccountContext = useCallback(async () => {
-    const profileRes = await fetch("/api/auth/me", { method: "GET" });
+    const profileRes = await fetch("/api/auth/me", {
+      method: "GET",
+      credentials: "same-origin",
+      cache: "no-store",
+    });
     if (!profileRes.ok) return;
     const profile = (await profileRes.json()) as {
       role?: string;
@@ -366,7 +370,9 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
         maxDevices: 1,
         durationDays: undefined,
       });
-      toast.success("Da tao key moi thanh cong");
+      toast.success("Đã tạo key — lưu / sao chép ngay. Sau khi tải lại trang chỉ còn hiển thị một phần.", {
+        duration: 10_000,
+      });
     } finally {
       setSubmitting(false);
     }
