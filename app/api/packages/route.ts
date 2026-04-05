@@ -15,7 +15,7 @@ const PatchPackageSchema = z.object({
   name: z.string().min(2).max(80),
   activationUiTitle: z.union([z.string().max(80), z.null()]).optional(),
   activationUiSubtitle: z.union([z.string().max(160), z.null()]).optional(),
-  /** Owner/admin only: token cũ hết hiệu lực, cấp PKG_ mới (client phải cập nhật packageToken). */
+  /** Chỉ owner nền tảng: token cũ hết hiệu lực, cấp PKG_ mới (client phải cập nhật packageToken). */
   regenerateToken: z.literal(true).optional(),
 });
 
@@ -110,8 +110,7 @@ export async function GET() {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
       const query = supabase.from("user_packages").select("*").order("created_at", { ascending: false });
-      const { data, error } =
-        role === "owner" || role === "admin" ? await query : await query.eq("owner_email", email);
+      const { data, error } = role === "owner" ? await query : await query.eq("owner_email", email);
       if (error) return NextResponse.json({ message: error.message }, { status: 500 });
       const rows = data ?? [];
       const missingTokenRows = rows.filter((row) => !row.token);
@@ -124,9 +123,7 @@ export async function GET() {
         }
       }
       const { data: refreshed, error: refreshError } =
-        role === "owner" || role === "admin"
-          ? await query
-          : await query.eq("owner_email", email);
+        role === "owner" ? await query : await query.eq("owner_email", email);
       if (refreshError) return NextResponse.json({ message: refreshError.message }, { status: 500 });
       const mapped = (refreshed ?? []).map((row) => ({
         id: row.id,
@@ -148,10 +145,7 @@ export async function GET() {
       });
     }
   }
-  const rows =
-    role === "owner" || role === "admin"
-      ? userPackages
-      : userPackages.filter((pkg) => pkg.ownerEmail === email);
+  const rows = role === "owner" ? userPackages : userPackages.filter((pkg) => pkg.ownerEmail === email);
   const activeCount = rows.filter((p) => p.status === "active").length;
   const archivedCount = rows.filter((p) => p.status === "archived").length;
   return NextResponse.json({
@@ -290,10 +284,14 @@ export async function PATCH(req: Request) {
   const normalized = normalizePackageName(name);
   if (!normalized) return NextResponse.json({ message: "Invalid package name" }, { status: 400 });
 
-  const elevated = role === "owner" || role === "admin";
+  const isPlatformOwner = role === "owner";
+  const touchesActivation = activationUiTitle !== undefined || activationUiSubtitle !== undefined;
+  if (regenerateToken !== true && !touchesActivation) {
+    return NextResponse.json({ message: "Không có trường cần cập nhật" }, { status: 400 });
+  }
 
-  if (regenerateToken === true && !elevated) {
-    return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được đổi package token" }, { status: 403 });
+  if (regenerateToken === true && !isPlatformOwner) {
+    return NextResponse.json({ message: "Forbidden — chỉ owner nền tảng được đổi package token" }, { status: 403 });
   }
 
   if (isSupabaseEnabled()) {
@@ -305,8 +303,9 @@ export async function PATCH(req: Request) {
       if (row.status === "archived") {
         return NextResponse.json({ message: "Package is archived — restore not supported via API" }, { status: 400 });
       }
-      if (!elevated && String(row.owner_email ?? "").toLowerCase() !== email.toLowerCase()) {
-        return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+      const ownerMatch = String(row.owner_email ?? "").toLowerCase() === email.toLowerCase();
+      if (touchesActivation && !isPlatformOwner && !ownerMatch) {
+        return NextResponse.json({ message: "Forbidden — chỉ chủ package hoặc owner nền tảng được sửa giao diện kích hoạt" }, { status: 403 });
       }
       const now = new Date().toISOString();
       const updates: Record<string, unknown> = { updated_at: now };
@@ -411,8 +410,12 @@ export async function PATCH(req: Request) {
   if (pkg.status === "archived") {
     return NextResponse.json({ message: "Package is archived — restore not supported via API" }, { status: 400 });
   }
-  if (!elevated && pkg.ownerEmail.toLowerCase() !== email.toLowerCase()) {
-    return NextResponse.json({ message: "Forbidden" }, { status: 403 });
+  const mockOwnerMatch = pkg.ownerEmail.toLowerCase() === email.toLowerCase();
+  if (touchesActivation && !isPlatformOwner && !mockOwnerMatch) {
+    return NextResponse.json(
+      { message: "Forbidden — chỉ chủ package hoặc owner nền tảng được sửa giao diện kích hoạt" },
+      { status: 403 }
+    );
   }
   if (regenerateToken === true) {
     pkg.token = generatePackageToken();
@@ -429,7 +432,7 @@ export async function PATCH(req: Request) {
 }
 
 /**
- * Soft-delete package: chỉ owner hoặc admin. Bản ghi vẫn trên DB (status archived + archived_at) để theo dõi / audit.
+ * Soft-delete package: chỉ owner nền tảng. Bản ghi vẫn trên DB (status archived + archived_at) để theo dõi / audit.
  */
 export async function DELETE(req: Request) {
   if (process.env.VERCEL === "1" && !isSupabaseEnabled()) {
@@ -444,8 +447,8 @@ export async function DELETE(req: Request) {
   const ctx = await requirePackageSession();
   if (!ctx) return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   const { email, role } = ctx;
-  if (role !== "owner" && role !== "admin") {
-    return NextResponse.json({ message: "Forbidden — chỉ owner hoặc admin được gỡ package" }, { status: 403 });
+  if (role !== "owner") {
+    return NextResponse.json({ message: "Forbidden — chỉ owner nền tảng được gỡ package" }, { status: 403 });
   }
 
   const url = new URL(req.url);

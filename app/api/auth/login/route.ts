@@ -25,6 +25,17 @@ export async function POST(req: Request) {
   let emailNorm = "";
   let username = "";
 
+  /** Production mà không có Supabase → không thể đăng nhập DB (tránh báo Invalid credentials gây hiểu nhầm). */
+  if (process.env.NODE_ENV === "production" && !isSupabaseEnabled()) {
+    return NextResponse.json(
+      {
+        message:
+          "Server chưa cấu hình Supabase: thêm NEXT_PUBLIC_SUPABASE_URL và SUPABASE_SERVICE_ROLE_KEY trong Vercel (Settings → Environment Variables) rồi Redeploy.",
+      },
+      { status: 503 }
+    );
+  }
+
   if (isSupabaseEnabled()) {
     const supabase = getSupabaseAdminClient();
     if (supabase) {
@@ -87,10 +98,12 @@ export async function POST(req: Request) {
           );
         }
       } else {
+        /** Postgres so sánh username phân biệt hoa/thường — dùng ilike để khớp mọi casing (vd DB: Wtuananh6886, nhập: wtuananh6886). */
         const { data: p, error: profErr } = await supabase
           .from("admin_profiles")
           .select("user_id, username, role")
-          .eq("username", key)
+          .ilike("username", ilikeExact(key.trim()))
+          .limit(1)
           .maybeSingle();
         if (profErr) {
           console.error("[login] admin_profiles by username:", profErr.message);
@@ -150,7 +163,7 @@ export async function POST(req: Request) {
           const devHint =
             process.env.NODE_ENV === "development"
               ? " Mật khẩu phải trùng đúng chuỗi đã dùng khi chạy npm run hash-password. Kiểm tra: node scripts/verify-scrypt.mjs \"MAT_KHAU\" \"scrypt$...\" (dán nguyên hash từ Supabase)."
-              : "";
+              : " Nếu chắc mật khẩu đúng: mở Supabase → users → kiểm tra password_hash (một dòng scrypt$..., không xuống dòng); trên Vercel kiểm tra đủ biến Supabase sau redeploy.";
           return NextResponse.json({ message: `Invalid credentials.${devHint}` }, { status: 401 });
         }
 

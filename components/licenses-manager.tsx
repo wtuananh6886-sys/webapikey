@@ -8,11 +8,14 @@ import { toast } from "sonner";
 import type { License } from "@/types/domain";
 import { Card, Button, Input, Select } from "@/components/ui-kit";
 import { TanstackLicenseTable } from "@/components/tanstack-license-table";
+import { useI18n } from "@/components/i18n-provider";
+import type { Locale } from "@/lib/i18n/constants";
 
-function formatViAccountDate(iso: string | null | undefined) {
+function formatAccountDate(iso: string | null | undefined, locale: Locale) {
   if (!iso) return "—";
+  const loc = locale === "vi" ? "vi-VN" : locale === "en" ? "en-US" : locale === "zh-CN" ? "zh-CN" : "zh-TW";
   try {
-    return new Date(iso).toLocaleString("vi-VN", {
+    return new Date(iso).toLocaleString(loc, {
       weekday: "long",
       day: "numeric",
       month: "long",
@@ -25,31 +28,52 @@ function formatViAccountDate(iso: string | null | undefined) {
   }
 }
 
-const CreateLicenseSchema = z.object({
-  packageName: z.string().min(2, "Vui long chon package").max(80),
-  keyMode: z.enum(["dynamic", "static"]),
-  key: z.string().optional(),
-  plan: z.enum(["basic", "pro", "premium"]),
-  status: z.enum(["active", "inactive", "expired", "banned", "revoked"]),
-  assignedUser: z.string().optional(),
-  deviceId: z.string().optional(),
-  maxDevices: z.number().int().min(1).max(20).optional(),
-  durationDays: z.number().int().min(1).max(3650).optional(),
-}).superRefine((data, ctx) => {
-  if (data.keyMode === "static" && !data.key?.trim()) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["key"],
-      message: "Key tinh can nhap key value",
+function buildCreateLicenseSchema(t: (key: string) => string) {
+  return z
+    .object({
+      packageName: z.string().max(80),
+      keyMode: z.enum(["dynamic", "static"]),
+      key: z.string().optional(),
+      plan: z.enum(["basic", "pro", "premium"]),
+      status: z.enum(["active", "inactive", "expired", "banned", "revoked"]),
+      assignedUser: z.string().optional(),
+      deviceId: z.string().optional(),
+      maxDevices: z.number().int().min(1).max(20).optional(),
+      durationDays: z.number().int().min(1).max(3650).optional(),
+    })
+    .superRefine((data, ctx) => {
+      if (data.packageName.trim().length < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["packageName"],
+          message: t("licenses.validationPackageName"),
+        });
+      }
+      if (data.keyMode === "static" && !data.key?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["key"],
+          message: t("licenses.validationStaticKey"),
+        });
+      }
     });
-  }
-});
+}
 
-type CreateLicenseForm = z.infer<typeof CreateLicenseSchema>;
-const CreatePackageSchema = z.object({
-  packageName: z.string().min(2, "Package name toi thieu 2 ky tu").max(80),
-});
-type CreatePackageForm = z.infer<typeof CreatePackageSchema>;
+type CreateLicenseForm = z.infer<ReturnType<typeof buildCreateLicenseSchema>>;
+
+function buildCreatePackageSchema(t: (key: string) => string) {
+  return z.object({ packageName: z.string().max(80) }).superRefine((data, ctx) => {
+    if (data.packageName.trim().length < 2) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["packageName"],
+        message: t("licenses.validationPackageName"),
+      });
+    }
+  });
+}
+
+type CreatePackageForm = z.infer<ReturnType<typeof buildCreatePackageSchema>>;
 
 type AccountPackageRow = {
   id?: string;
@@ -70,6 +94,14 @@ type PackageListMeta = {
 };
 
 export function LicensesManager({ initialData = [] }: { initialData?: License[] }) {
+  const { locale } = useI18n();
+  return <LicensesManagerCore key={locale} initialData={initialData} />;
+}
+
+function LicensesManagerCore({ initialData = [] }: { initialData?: License[] }) {
+  const { t, locale } = useI18n();
+  const createLicenseSchema = useMemo(() => buildCreateLicenseSchema(t), [t]);
+  const createPackageSchema = useMemo(() => buildCreatePackageSchema(t), [t]);
   const [licenses, setLicenses] = useState<License[]>(initialData);
   const [licensesLoading, setLicensesLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -122,7 +154,7 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
   const defaultExpiry = useMemo(() => 30, []);
 
   const form = useForm<CreateLicenseForm>({
-    resolver: zodResolver(CreateLicenseSchema),
+    resolver: zodResolver(createLicenseSchema),
     defaultValues: {
       packageName: "",
       keyMode: "dynamic",
@@ -142,13 +174,13 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
     () => accountPackages.find((pkg) => pkg.name === selectedPackageName)?.token ?? "",
     [accountPackages, selectedPackageName]
   );
-  const canArchivePackages = accountRole === "owner" || accountRole === "admin";
+  const isPlatformOwner = accountRole === "owner";
   const archivedPackageRows = useMemo(
     () => allPackageRows.filter((p) => p.status === "archived"),
     [allPackageRows]
   );
   const packageForm = useForm<CreatePackageForm>({
-    resolver: zodResolver(CreatePackageSchema),
+    resolver: zodResolver(createPackageSchema),
     defaultValues: { packageName: "" },
   });
 
@@ -234,8 +266,8 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
   };
 
   const archivePackage = async (name: string) => {
-    if (!canArchivePackages) {
-      toast.error("Chỉ owner hoặc admin được gỡ package.");
+    if (!isPlatformOwner) {
+      toast.error("Chỉ owner nền tảng được gỡ package.");
       return;
     }
     const ok = window.confirm(
@@ -264,8 +296,8 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
   };
 
   const regeneratePackageToken = async (name: string) => {
-    if (!canArchivePackages) {
-      toast.error("Chỉ owner hoặc admin được đổi package token.");
+    if (!isPlatformOwner) {
+      toast.error("Chỉ owner nền tảng được đổi package token.");
       return;
     }
     const ok = window.confirm(
@@ -414,100 +446,109 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
-          <h3 className="mb-3 text-base font-semibold">Plan privileges</h3>
+          <h3 className="mb-3 text-base font-semibold">{t("licenses.planPrivileges")}</h3>
           <div className="space-y-2 text-sm text-slate-300">
-            <p><span className="font-medium text-white">basic:</span> gói dashboard — tối đa 3 package token + 30 key / tháng (mặc định user mới).</p>
-            <p><span className="font-medium text-white">pro:</span> 10 package token + 200 key / tháng.</p>
-            <p><span className="font-medium text-white">premium:</span> 50 package token + 500 key / tháng. Owner không giới hạn.</p>
+            <p>{t("licenses.planBasic")}</p>
+            <p>{t("licenses.planPro")}</p>
+            <p>{t("licenses.planPremium")}</p>
           </div>
         </Card>
         <Card>
-          <h3 className="mb-3 text-base font-semibold">Admin role rights</h3>
+          <h3 className="mb-3 text-base font-semibold">{t("licenses.roleRights")}</h3>
           <div className="space-y-2 text-sm text-slate-300">
-            <p><span className="font-medium text-white">owner:</span> full control, roles/settings/security.</p>
-            <p><span className="font-medium text-white">admin:</span> full control (all permissions) for operations.</p>
-            <p><span className="font-medium text-white">support/viewer:</span> support can handle keys, viewer read-only.</p>
+            <p>{t("licenses.roleOwner")}</p>
+            <p>{t("licenses.roleAdmin")}</p>
+            <p>{t("licenses.roleSupport")}</p>
           </div>
         </Card>
         <Card>
-          <h3 className="mb-3 text-base font-semibold">Current account package</h3>
+          <h3 className="mb-3 text-base font-semibold">{t("licenses.currentAccount")}</h3>
           <div className="space-y-2 text-sm text-slate-300">
-            <p><span className="font-medium text-white">Email:</span> {accountEmail || "—"}</p>
-            <p><span className="font-medium text-white">Username:</span> {accountUsername || "—"}</p>
             <p>
-              <span className="font-medium text-white">Tài khoản tạo lúc:</span>{" "}
-              <span className="text-slate-200">{formatViAccountDate(accountCreatedAt)}</span>
+              <span className="font-medium text-white">{t("dashboard.email")}:</span> {accountEmail || "—"}
             </p>
-            <p><span className="font-medium text-white">Role:</span> {accountRole}</p>
-            <p><span className="font-medium text-white">Current package:</span> {currentPackage}</p>
             <p>
-              <span className="font-medium text-white">Package đang hoạt động:</span>{" "}
+              <span className="font-medium text-white">{t("licenses.username")}:</span> {accountUsername || "—"}
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.accountCreatedLabel")}</span>{" "}
+              <span className="text-slate-200">{formatAccountDate(accountCreatedAt, locale)}</span>
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.role")}:</span> {accountRole}
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.currentPackage")}:</span> {currentPackage}
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.activePackages")}</span>{" "}
               {packageMeta?.activeCount ?? accountPackages.length} —{" "}
               <span className="text-slate-400">
-                {accountPackages.map((pkg) => pkg.name).join(", ") || (packageMeta ? "—" : "loading...")}
+                {accountPackages.map((pkg) => pkg.name).join(", ") || (packageMeta ? "—" : t("common.loading"))}
               </span>
             </p>
             <p>
-              <span className="font-medium text-white">Đã gỡ (vẫn lưu server):</span>{" "}
+              <span className="font-medium text-white">{t("licenses.archivedStored")}</span>{" "}
               {packageMeta?.archivedCount ?? archivedPackageRows.length}
             </p>
             <p>
-              <span className="font-medium text-white">Tổng package (theo dõi):</span> {packageMeta?.totalCount ?? allPackageRows.length}
+              <span className="font-medium text-white">{t("licenses.totalTracked")}</span> {packageMeta?.totalCount ?? allPackageRows.length}
             </p>
-            <p><span className="font-medium text-white">Selected token:</span> {selectedPackageToken || "-"}</p>
-            <p><span className="font-medium text-white">Scope:</span> License, Server, Tweaks, Logs, Settings</p>
-            <p><span className="font-medium text-white">Status:</span> Active</p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.selectedToken")}:</span> {selectedPackageToken || "—"}
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.scope")}</span> {t("licenses.scopeValue")}
+            </p>
+            <p>
+              <span className="font-medium text-white">{t("licenses.status")}</span> {t("licenses.accountStatusLabel")}
+            </p>
           </div>
         </Card>
       </div>
 
-      <Card>
-        <h2 className="mb-2 text-base font-semibold">Package management</h2>
-        <p className="mb-3 text-sm text-slate-400">
-          Chỉ <span className="font-medium text-slate-200">owner</span> hoặc <span className="font-medium text-slate-200">admin</span> mới gỡ package hoặc{" "}
-          <span className="font-medium text-slate-200">đổi package token</span> cho user.
-          Gỡ = soft delete (dữ liệu vẫn trên server). Đổi token = token cũ vô hiệu, cấp <code className="text-cyan-300/90">PKG_…</code> mới — client bắt buộc cập nhật{" "}
-          <code className="text-cyan-300/90">packageToken</code>.
-        </p>
-        <div className="mb-4 flex flex-wrap gap-2">
-          <span className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 sm:text-sm">
-            Hoạt động: {packageMeta?.activeCount ?? accountPackages.length}
-          </span>
-          <span className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 sm:text-sm">
-            Đã gỡ: {packageMeta?.archivedCount ?? archivedPackageRows.length}
-          </span>
-          <span className="rounded-lg border border-slate-600/80 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300 sm:text-sm">
-            Tổng: {packageMeta?.totalCount ?? allPackageRows.length}
-          </span>
-        </div>
-        {(accountPackages.length > 0 || archivedPackageRows.length > 0) && (
-          <div className="mb-4 overflow-x-auto rounded-xl border border-slate-700/70">
-            <table className="w-full min-w-[36rem] text-left text-sm text-slate-300 sm:min-w-0">
-              <thead className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-2.5 font-medium">Package</th>
-                  {(accountRole === "owner" || accountRole === "admin") && <th className="px-3 py-2.5 font-medium">Owner</th>}
-                  <th className="px-3 py-2.5 font-medium">Tạo</th>
-                  <th className="px-3 py-2.5 font-medium">Trạng thái</th>
-                  {canArchivePackages && <th className="px-3 py-2.5 font-medium text-right">Thao tác</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/90">
-                {accountPackages.map((pkg) => (
-                  <tr key={pkg.name} className="bg-slate-950/20">
-                    <td className="px-3 py-2.5 font-medium text-white">{pkg.name}</td>
-                    {(accountRole === "owner" || accountRole === "admin") && (
+      {isPlatformOwner ? (
+        <Card>
+          <h2 className="mb-2 text-base font-semibold">{t("licenses.packageMgmtTitle")}</h2>
+          <p className="mb-3 text-sm leading-relaxed text-slate-400">{t("licenses.packageMgmtDesc")}</p>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <span className="rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-100 sm:text-sm">
+              {t("licenses.active")} {packageMeta?.activeCount ?? accountPackages.length}
+            </span>
+            <span className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-100 sm:text-sm">
+              {t("licenses.archived")} {packageMeta?.archivedCount ?? archivedPackageRows.length}
+            </span>
+            <span className="rounded-lg border border-slate-600/80 bg-slate-800/50 px-3 py-1.5 text-xs text-slate-300 sm:text-sm">
+              {t("licenses.total")} {packageMeta?.totalCount ?? allPackageRows.length}
+            </span>
+          </div>
+          {(accountPackages.length > 0 || archivedPackageRows.length > 0) && (
+            <div className="overflow-x-auto rounded-xl border border-slate-700/70">
+              <table className="w-full min-w-[36rem] text-left text-sm text-slate-300 sm:min-w-0">
+                <thead className="border-b border-slate-700/80 bg-slate-900/50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2.5 font-medium">{t("licenses.colPackage")}</th>
+                    <th className="px-3 py-2.5 font-medium">{t("licenses.colOwner")}</th>
+                    <th className="px-3 py-2.5 font-medium">{t("licenses.colCreated")}</th>
+                    <th className="px-3 py-2.5 font-medium">{t("licenses.colState")}</th>
+                    <th className="px-3 py-2.5 text-right font-medium">{t("licenses.colActions")}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/90">
+                  {accountPackages.map((pkg) => (
+                    <tr key={pkg.name} className="bg-slate-950/20">
+                      <td className="px-3 py-2.5 font-medium text-white">{pkg.name}</td>
                       <td className="max-w-[10rem] truncate px-3 py-2.5 text-xs text-slate-400" title={pkg.ownerEmail}>
                         {pkg.ownerEmail ?? "—"}
                       </td>
-                    )}
-                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">
-                      {formatViAccountDate(pkg.createdAt)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-200">active</span>
-                    </td>
-                    {canArchivePackages && (
+                      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">
+                        {formatAccountDate(pkg.createdAt, locale)}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-200">
+                          {t("licenses.stateActive")}
+                        </span>
+                      </td>
                       <td className="px-3 py-2.5 text-right">
                         <div className="flex flex-wrap items-center justify-end gap-1.5">
                           <button
@@ -516,7 +557,7 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
                             onClick={() => void regeneratePackageToken(pkg.name)}
                             className="touch-manipulation rounded-lg border border-amber-500/45 bg-amber-500/10 px-2.5 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {tokenRegeneratingName === pkg.name ? "…" : "Đổi token"}
+                            {tokenRegeneratingName === pkg.name ? "…" : t("licenses.changeToken")}
                           </button>
                           <button
                             type="button"
@@ -524,58 +565,61 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
                             onClick={() => void archivePackage(pkg.name)}
                             className="touch-manipulation rounded-lg border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-medium text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {archivingName === pkg.name ? "…" : "Gỡ"}
+                            {archivingName === pkg.name ? "…" : t("licenses.remove")}
                           </button>
                         </div>
                       </td>
-                    )}
-                  </tr>
-                ))}
-                {archivedPackageRows.map((pkg) => (
-                  <tr key={`arch-${pkg.name}`} className="bg-slate-900/40 opacity-90">
-                    <td className="px-3 py-2.5 font-medium text-slate-400 line-through decoration-slate-600">{pkg.name}</td>
-                    {(accountRole === "owner" || accountRole === "admin") && (
+                    </tr>
+                  ))}
+                  {archivedPackageRows.map((pkg) => (
+                    <tr key={`arch-${pkg.name}`} className="bg-slate-900/40 opacity-90">
+                      <td className="px-3 py-2.5 font-medium text-slate-400 line-through decoration-slate-600">{pkg.name}</td>
                       <td className="max-w-[10rem] truncate px-3 py-2.5 text-xs text-slate-500" title={pkg.ownerEmail}>
                         {pkg.ownerEmail ?? "—"}
                       </td>
-                    )}
-                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">{formatViAccountDate(pkg.createdAt)}</td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="w-fit rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-200">archived</span>
-                        <span className="text-[10px] text-slate-500">Gỡ: {formatViAccountDate(pkg.archivedAt)}</span>
-                      </div>
-                    </td>
-                    {canArchivePackages && <td className="px-3 py-2.5 text-right text-xs text-slate-600">—</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                      <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-500">{formatAccountDate(pkg.createdAt, locale)}</td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="w-fit rounded-md bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-200">
+                            {t("licenses.stateArchived")}
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            {t("licenses.removedAt")} {formatAccountDate(pkg.archivedAt, locale)}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-xs text-slate-600">—</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      ) : null}
+
+      <Card>
+        <h2 className="mb-2 text-base font-semibold">{t("licenses.createPackageTitle")}</h2>
         <form className="grid grid-cols-1 gap-3 md:grid-cols-4" onSubmit={packageForm.handleSubmit(onCreatePackage)}>
           <div className="md:col-span-3">
-            <Input placeholder="Tao package moi (vd: tuananh)" {...packageForm.register("packageName")} />
+            <Input placeholder={t("licenses.createPackagePlaceholder")} {...packageForm.register("packageName")} />
           </div>
           <Button type="submit" disabled={creatingPackage}>
-            {creatingPackage ? "Dang tao..." : "Tao Package"}
+            {creatingPackage ? t("licenses.createPackageLoading") : t("licenses.createPackageSubmit")}
           </Button>
         </form>
         <p className="mt-2 text-xs text-slate-500">
-          {packageForm.formState.errors.packageName?.message || "Moi account co package rieng, key se bi bind theo package."}
+          {packageForm.formState.errors.packageName?.message || t("licenses.createPackageHint")}
         </p>
       </Card>
 
       <Card>
-        <h2 className="mb-1 text-base font-semibold">Tiêu đề màn hình nhập key (client / ImGui)</h2>
-        <p className="mb-3 text-sm text-slate-400">
-          Mỗi package có thể đặt title & dòng phụ hiển thị trên tweak. Để trống title → client dùng mặc định &quot;AOV Pro Activation&quot;. API:{" "}
-          <code className="text-xs text-cyan-300/90">POST /api/licenses/activation-ui</code> với <code className="text-xs">packageToken</code>.
-        </p>
+        <h2 className="mb-1 text-base font-semibold">{t("licenses.activationTitle")}</h2>
+        <p className="mb-3 text-sm leading-relaxed text-slate-400">{t("licenses.activationDesc")}</p>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <Select value={brandPkg} onChange={(e) => setBrandPkg(e.target.value)} disabled={accountPackages.length === 0}>
             {accountPackages.length === 0 ? (
-              <option value="">Chưa có package</option>
+              <option value="">{t("licenses.noPackage")}</option>
             ) : (
               accountPackages.map((pkg) => (
                 <option key={pkg.name} value={pkg.name}>
@@ -586,13 +630,13 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
           </Select>
           <div className="md:col-span-2 grid gap-2 sm:grid-cols-2">
             <Input
-              placeholder="Tiêu đề (vd: Shop Key VIP)"
+              placeholder={t("licenses.titlePlaceholder")}
               value={brandTitle}
               onChange={(e) => setBrandTitle(e.target.value)}
               maxLength={80}
             />
             <Input
-              placeholder="Dòng phụ tùy chọn (vd: Liên hệ admin sau khi mua)"
+              placeholder={t("licenses.subtitlePlaceholder")}
               value={brandSub}
               onChange={(e) => setBrandSub(e.target.value)}
               maxLength={160}
@@ -600,7 +644,7 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
           </div>
           <div className="flex flex-wrap items-center gap-2 md:col-span-2">
             <Button type="button" disabled={savingBrand || accountPackages.length === 0} onClick={() => void saveActivationBranding()}>
-              {savingBrand ? "Đang lưu…" : "Lưu tiêu đề"}
+              {savingBrand ? t("licenses.saving") : t("licenses.saveBranding")}
             </Button>
             <button
               type="button"
@@ -608,7 +652,7 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
               onClick={() => void testActivationUiApi()}
               className="rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {brandPreviewLoading ? "Đang gọi API…" : "Thử API (như tweak)"}
+              {brandPreviewLoading ? t("licenses.testingApi") : t("licenses.testApi")}
             </button>
           </div>
           {brandPreview && (
@@ -630,140 +674,152 @@ export function LicensesManager({ initialData = [] }: { initialData?: License[] 
         </div>
       </Card>
 
-      <Card>
-        <h2 className="text-base font-semibold">Tao key moi</h2>
-        <p className="mb-4 text-sm text-slate-400">Chon package cua account. Key format bat buoc: package-&lt;days&gt;day-XXXXXX.</p>
-        <div className="mb-3 rounded-xl border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs text-cyan-200">
-          Key preview: {(selectedPackageName || "package-name")}-{selectedDurationDays ?? defaultExpiry}day-XXXXXX
+      <Card className="overflow-hidden border-cyan-500/15 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-cyan-950/20">
+        <div className="mb-4 flex flex-col gap-1 border-b border-slate-700/60 pb-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-white">{t("licenses.createKeyTitle")}</h2>
+            <p className="mt-1 max-w-2xl text-sm text-slate-400">{t("licenses.createKeySubtitle")}</p>
+          </div>
+          <div className="mt-2 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-3 py-2 font-mono text-[11px] text-cyan-100 sm:mt-0 sm:text-xs">
+            <span className="text-cyan-400/90">{t("licenses.keyPreview")}</span>{" "}
+            {(selectedPackageName || "package-name")}-{selectedDurationDays ?? defaultExpiry}day-XXXXXX
+          </div>
         </div>
-        <form className="grid grid-cols-1 gap-3 md:grid-cols-3" onSubmit={form.handleSubmit(onCreate)}>
-          <Select {...form.register("packageName")}>
-            <option value="">Select package</option>
-            {accountPackages.map((pkg) => (
-              <option key={pkg.name} value={pkg.name}>{pkg.name}</option>
-            ))}
-          </Select>
-          <Select {...form.register("keyMode")}>
-            <option value="dynamic">dynamic (system auto generate)</option>
-            <option value="static">static (custom key value)</option>
-          </Select>
-          <Select {...form.register("plan")}>
-            <option value="basic">basic</option>
-            <option value="pro">pro</option>
-            <option value="premium">premium</option>
-          </Select>
-          <Input
-            placeholder="Custom key static (vd: abcvip-30day-X9K2Q1)"
-            disabled={keyMode !== "static"}
-            {...form.register("key")}
-          />
-          <Select {...form.register("status")}>
-            <option value="active">active</option>
-            <option value="inactive">inactive</option>
-            <option value="expired">expired</option>
-            <option value="banned">banned</option>
-            <option value="revoked">revoked</option>
-          </Select>
-          <Input placeholder="Assigned user (optional)" {...form.register("assignedUser")} />
-          <Input placeholder="Device ID (optional)" {...form.register("deviceId")} />
-          <Controller
-            name="maxDevices"
-            control={form.control}
-            render={({ field }) => (
+
+        <form className="space-y-6" onSubmit={form.handleSubmit(onCreate)}>
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{t("licenses.sectionPackage")}</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Select {...form.register("packageName")}>
+                <option value="">{t("licenses.selectPackage")}</option>
+                {accountPackages.map((pkg) => (
+                  <option key={pkg.name} value={pkg.name}>
+                    {pkg.name}
+                  </option>
+                ))}
+              </Select>
+              <Select {...form.register("keyMode")}>
+                <option value="dynamic">{t("licenses.keyModeDynamic")}</option>
+                <option value="static">{t("licenses.keyModeStatic")}</option>
+              </Select>
               <Input
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder="Max devices (1–20)"
-                value={field.value === undefined || field.value === null ? "" : String(field.value)}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/\D/g, "");
-                  if (digits === "") {
-                    field.onChange(undefined);
-                    return;
-                  }
-                  const n = parseInt(digits, 10);
-                  if (!Number.isNaN(n)) field.onChange(n);
-                }}
-                onBlur={() => {
-                  const v = field.value;
-                  if (v === undefined || v === null || Number.isNaN(v) || v < 1) field.onChange(1);
-                  else if (v > 20) field.onChange(20);
-                  field.onBlur();
-                }}
+                className="sm:col-span-2 lg:col-span-1"
+                placeholder={t("licenses.customKeyPlaceholder")}
+                disabled={keyMode !== "static"}
+                {...form.register("key")}
               />
-            )}
-          />
-          <Controller
-            name="durationDays"
-            control={form.control}
-            render={({ field }) => (
-              <Input
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                placeholder="Thoi han key (days) - vd: 30"
-                value={field.value === undefined || field.value === null ? "" : String(field.value)}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/\D/g, "");
-                  if (digits === "") {
-                    field.onChange(undefined);
-                    return;
-                  }
-                  const n = parseInt(digits, 10);
-                  if (!Number.isNaN(n)) field.onChange(n);
-                }}
-                onBlur={() => {
-                  field.onBlur();
-                }}
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{t("licenses.sectionAccess")}</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Select {...form.register("plan")}>
+                <option value="basic">{t("licenses.optPlanBasic")}</option>
+                <option value="pro">{t("licenses.optPlanPro")}</option>
+                <option value="premium">{t("licenses.optPlanPremium")}</option>
+              </Select>
+              <Select {...form.register("status")}>
+                <option value="active">{t("licenses.optStatusActive")}</option>
+                <option value="inactive">{t("licenses.optStatusInactive")}</option>
+                <option value="expired">{t("licenses.optStatusExpired")}</option>
+                <option value="banned">{t("licenses.optStatusBanned")}</option>
+                <option value="revoked">{t("licenses.optStatusRevoked")}</option>
+              </Select>
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">{t("licenses.sectionDevice")}</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <Input placeholder={t("licenses.assignedUser")} {...form.register("assignedUser")} />
+              <Input placeholder={t("licenses.deviceId")} {...form.register("deviceId")} />
+              <Controller
+                name="maxDevices"
+                control={form.control}
+                render={({ field }) => (
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder={t("licenses.maxDevices")}
+                    value={field.value === undefined || field.value === null ? "" : String(field.value)}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, "");
+                      if (digits === "") {
+                        field.onChange(undefined);
+                        return;
+                      }
+                      const n = parseInt(digits, 10);
+                      if (!Number.isNaN(n)) field.onChange(n);
+                    }}
+                    onBlur={() => {
+                      const v = field.value;
+                      if (v === undefined || v === null || Number.isNaN(v) || v < 1) field.onChange(1);
+                      else if (v > 20) field.onChange(20);
+                      field.onBlur();
+                    }}
+                  />
+                )}
               />
-            )}
-          />
-          <div className="md:col-span-2">
-            <Button type="submit" disabled={submitting}>
-              {submitting ? "Dang tao..." : "Tao Key"}
+              <Controller
+                name="durationDays"
+                control={form.control}
+                render={({ field }) => (
+                  <Input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder={t("licenses.durationDays")}
+                    value={field.value === undefined || field.value === null ? "" : String(field.value)}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, "");
+                      if (digits === "") {
+                        field.onChange(undefined);
+                        return;
+                      }
+                      const n = parseInt(digits, 10);
+                      if (!Number.isNaN(n)) field.onChange(n);
+                    }}
+                    onBlur={() => {
+                      field.onBlur();
+                    }}
+                  />
+                )}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-slate-700/50 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <Button type="submit" disabled={submitting} className="min-h-11 w-full sm:w-auto">
+              {submitting ? t("licenses.creatingKey") : t("licenses.submitCreateKey")}
             </Button>
+            <div className="flex flex-col gap-2 sm:items-end">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full border-slate-600 bg-slate-800/80 hover:bg-slate-700 sm:w-auto"
+                onClick={() => {
+                  if (!selectedPackageToken) return;
+                  void navigator.clipboard.writeText(selectedPackageToken);
+                  toast.success(t("licenses.copyTokenToast"));
+                }}
+              >
+                {t("licenses.copyPackageToken")}
+              </Button>
+              <p className="max-w-md text-right text-[11px] text-slate-500">{t("licenses.copyTokenHint")}</p>
+            </div>
           </div>
         </form>
-        <p className="mt-2 text-xs text-slate-500">
-          {form.formState.errors.key?.message || form.formState.errors.packageName?.message || form.formState.errors.durationDays?.message}
+        <p className="mt-3 text-xs text-amber-200/80">
+          {form.formState.errors.key?.message ||
+            form.formState.errors.packageName?.message ||
+            form.formState.errors.durationDays?.message}
         </p>
-        <div className="mt-2 flex items-center gap-2">
-          <Button
-            type="button"
-            className="bg-slate-700 hover:bg-slate-600"
-            onClick={() => {
-              if (!selectedPackageToken) return;
-              navigator.clipboard.writeText(selectedPackageToken);
-              toast.success("Da copy package token");
-            }}
-          >
-            Copy package token
-          </Button>
-          <p className="text-xs text-slate-500">Token nay can truyen trong UI enter key (packageToken).</p>
-        </div>
-      </Card>
-
-      <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="font-semibold">ImGui API Client</h3>
-            <p className="text-sm text-slate-400">
-              File <code className="text-xs text-cyan-300/90">public/api.zip</code> tạo lúc <code className="text-xs">npm run build</code> / <code className="text-xs">dev</code> từ <code className="text-xs">integration-client</code> — deploy lại là zip mới.
-            </p>
-          </div>
-          <a
-            href="/api.zip"
-            download
-            className="rounded-xl bg-cyan-500 px-3 py-2 text-sm font-medium text-white transition hover:bg-cyan-400"
-          >
-            Tai api.zip
-          </a>
-        </div>
       </Card>
 
       {licensesLoading ? (
-        <Card className="p-6 text-center text-sm text-slate-400">Đang tải danh sách key từ server…</Card>
+        <Card className="p-6 text-center text-sm text-slate-400">{t("licenses.loadingKeys")}</Card>
       ) : (
         <TanstackLicenseTable data={licenses} onRefresh={refreshLicenses} />
       )}

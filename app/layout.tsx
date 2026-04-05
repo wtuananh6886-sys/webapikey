@@ -1,7 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { Cinzel, Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
 import "./globals.css";
 import { Toaster } from "sonner";
+import { AppProviders } from "@/components/app-providers";
+import { SkipToContentLink } from "@/components/skip-to-content";
+import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from "@/lib/i18n/constants";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -38,23 +42,29 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
+function htmlLangFromCookieLocale(locale: string): string {
+  if (locale === "vi") return "vi";
+  if (locale === "en") return "en";
+  return "zh";
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const cookieStore = await cookies();
+  const rawLocale = cookieStore.get(LOCALE_COOKIE)?.value;
+  const initialLocale = isLocale(rawLocale) ? rawLocale : DEFAULT_LOCALE;
+
   return (
     <html
-      lang="vi"
+      lang={htmlLangFromCookieLocale(initialLocale)}
       className={`${geistSans.variable} ${geistMono.variable} ${cinzel.variable} h-full antialiased`}
     >
       <body className="flex min-h-full min-h-[100dvh] flex-col">
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-[max(1rem,env(safe-area-inset-top))] focus:z-[100] focus:rounded-xl focus:bg-[var(--accent-deep)] focus:px-4 focus:py-2.5 focus:text-sm focus:font-medium focus:text-[#1a1208] focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
-        >
-          Bỏ qua đến nội dung
-        </a>
+        <AppProviders initialLocale={initialLocale}>
+        <SkipToContentLink />
         {children}
         <Toaster
           theme="dark"
@@ -69,6 +79,7 @@ export default function RootLayout({
           }}
           className="!top-[max(0.75rem,env(safe-area-inset-top))] sm:!left-auto sm:!right-4 sm:!top-4"
         />
+        </AppProviders>
       </body>
     </html>
   );

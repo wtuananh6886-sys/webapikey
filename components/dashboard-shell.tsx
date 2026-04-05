@@ -19,18 +19,20 @@ import {
   X,
 } from "lucide-react";
 import { roleMaySeeNavItem } from "@/lib/dashboard-path-policy";
-import { dashboardPageTitle } from "@/lib/dashboard-page-meta";
+import { dashboardPagePathKey } from "@/lib/dashboard-page-meta";
+import { useI18n } from "@/components/i18n-provider";
+import { LocaleSwitcher } from "@/components/locale-switcher";
 
 const nav = [
-  { href: "/dashboard", label: "Tổng quan", icon: LayoutDashboard },
-  { href: "/dashboard/licenses", label: "License & key", icon: KeyRound },
-  { href: "/dashboard/servers", label: "Máy chủ", icon: Server },
-  { href: "/dashboard/tweaks", label: "Tweaks", icon: Package },
-  { href: "/dashboard/users", label: "Người dùng", icon: Users },
-  { href: "/dashboard/admins", label: "Chính sách", icon: ShieldUser },
-  { href: "/dashboard/logs", label: "Nhật ký", icon: Telescope },
-  { href: "/dashboard/settings", label: "Cài đặt", icon: Settings },
-];
+  { href: "/dashboard", labelKey: "nav.overview", icon: LayoutDashboard },
+  { href: "/dashboard/licenses", labelKey: "nav.licenses", icon: KeyRound },
+  { href: "/dashboard/servers", labelKey: "nav.servers", icon: Server },
+  { href: "/dashboard/tweaks", labelKey: "nav.tweaks", icon: Package },
+  { href: "/dashboard/users", labelKey: "nav.users", icon: Users },
+  { href: "/dashboard/admins", labelKey: "nav.admins", icon: ShieldUser },
+  { href: "/dashboard/logs", labelKey: "nav.logs", icon: Telescope },
+  { href: "/dashboard/settings", labelKey: "nav.settings", icon: Settings },
+] as const;
 
 type MePolicy = {
   assignedPlan: string;
@@ -58,6 +60,7 @@ function NavLinks({
   onNavigate?: () => void;
   role: string;
 }) {
+  const { t } = useI18n();
   return (
     <nav className="space-y-2">
       {nav
@@ -87,7 +90,7 @@ function NavLinks({
                 className={`shrink-0 transition-opacity ${active ? "text-[var(--accent)]" : "opacity-75 group-hover:opacity-100"}`}
                 aria-hidden
               />
-              <span className="truncate font-medium">{item.label}</span>
+              <span className="truncate font-medium">{t(item.labelKey)}</span>
             </Link>
           );
         })}
@@ -96,6 +99,7 @@ function NavLinks({
 }
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
+  const { t, locale } = useI18n();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -147,9 +151,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (searchParams.get("forbidden") !== "1") return;
-    toast.error("Bạn không có quyền truy cập trang đó.");
+    toast.error(t("common.forbiddenToast"));
     router.replace("/dashboard", { scroll: false });
-  }, [searchParams, router]);
+  }, [searchParams, router, t]);
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -167,36 +171,40 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const closeMobileNav = useCallback(() => setMobileNavOpen(false), []);
 
   const currentPackage = useMemo(() => {
-    if (role === "owner") return "Owner — không giới hạn quota";
-    if (policy?.assignedPlan) return `Gói ${policy.assignedPlan}`;
-    if (role === "admin") return "Admin (theo gói được gán)";
-    if (role === "support") return "Support";
-    return "Viewer";
-  }, [role, policy?.assignedPlan]);
+    if (role === "owner") return t("dashboard.currentPackageOwner");
+    if (policy?.assignedPlan)
+      return t("dashboard.currentPackagePlan").replace("{plan}", policy.assignedPlan);
+    if (role === "admin") return t("dashboard.currentPackageAdmin");
+    if (role === "support") return t("dashboard.currentPackageSupport");
+    return t("dashboard.currentPackageViewer");
+  }, [role, policy, t]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
   }
 
+  const dateLocale =
+    locale === "vi" ? "vi-VN" : locale === "en" ? "en-US" : locale === "zh-CN" ? "zh-CN" : "zh-TW";
+
   const accountBlock = (
     <div className="nexora-frame relative mb-5 p-4">
       <div className="relative z-[1]">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--teal)]">Tài khoản</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-[var(--teal)]">{t("dashboard.account")}</p>
       <div className="mt-3 grid gap-2 text-[11px] sm:grid-cols-2 sm:gap-x-3">
         <div className="min-w-0">
-          <span className="text-[var(--foreground-muted)]">Email</span>
+          <span className="text-[var(--foreground-muted)]">{t("dashboard.email")}</span>
           <p className="truncate font-medium text-[var(--foreground-secondary)]">{email || "—"}</p>
         </div>
         <div className="min-w-0">
-          <span className="text-[var(--foreground-muted)]">User</span>
+          <span className="text-[var(--foreground-muted)]">{t("dashboard.user")}</span>
           <p className="truncate font-medium text-[var(--foreground-secondary)]">{username || "—"}</p>
         </div>
       </div>
       {accountCreatedAt ? (
         <p className="mt-2 text-[11px] leading-snug text-[var(--foreground-muted)]">
-          Tạo tài khoản:{" "}
-          {new Date(accountCreatedAt).toLocaleString("vi-VN", {
+          {t("dashboard.accountCreated")}{" "}
+          {new Date(accountCreatedAt).toLocaleString(dateLocale, {
             day: "numeric",
             month: "short",
             year: "numeric",
@@ -215,25 +223,27 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         <p
           className={`mt-1 text-xs ${persistence.ok ? "text-emerald-400/90" : "text-amber-300/90"}`}
         >
-          CSDL: {persistence.ok ? "Supabase OK" : "Mock / chưa sẵn sàng"}
+          {persistence.ok ? t("dashboard.dbOk") : t("dashboard.dbMock")}
         </p>
       ) : null}
       {policy && role !== "owner" ? (
         <>
           <p className="mt-1 text-xs text-[var(--foreground-muted)]">
-            Package / tháng: {policy.packageTokensUsedThisMonth}/{policy.monthlyPackageTokenLimit}
+            {t("dashboard.pkgPerMonth")} {policy.packageTokensUsedThisMonth}/{policy.monthlyPackageTokenLimit}
           </p>
           <p className="mt-1 text-xs text-[var(--foreground-muted)]">
-            Key / tháng: {policy.keysUsedThisMonth}/{policy.monthlyKeyLimit}
+            {t("dashboard.keysPerMonth")} {policy.keysUsedThisMonth}/{policy.monthlyKeyLimit}
           </p>
           {policy.expiresAt ? (
-            <p className="mt-1 text-xs text-amber-300/90">Hết hạn: {new Date(policy.expiresAt).toLocaleString("vi-VN")}</p>
+            <p className="mt-1 text-xs text-amber-300/90">
+              {t("dashboard.expires")} {new Date(policy.expiresAt).toLocaleString(dateLocale)}
+            </p>
           ) : null}
         </>
       ) : role === "owner" ? (
-        <p className="mt-1 text-xs text-emerald-400/90">Owner không giới hạn quota.</p>
+        <p className="mt-1 text-xs text-emerald-400/90">{t("dashboard.ownerUnlimited")}</p>
       ) : (
-        <p className="mt-1 text-xs text-[var(--foreground-muted)]">Chưa có policy — đăng nhập lại hoặc liên hệ admin.</p>
+        <p className="mt-1 text-xs text-[var(--foreground-muted)]">{t("dashboard.noPolicy")}</p>
       )}
       </div>
     </div>
@@ -244,8 +254,8 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <div className="relative z-[1] flex items-center gap-3">
         <span className="nexora-mark grid h-10 w-10 shrink-0 place-items-center rounded-xl text-sm font-bold">N</span>
         <div className="min-w-0">
-          <p className="font-display text-lg leading-tight text-[var(--foreground)]">Nexora-API</p>
-          <p className="text-[11px] text-[var(--foreground-muted)]">Console vận hành</p>
+          <p className="font-display text-lg leading-tight text-[var(--foreground)]">{t("dashboard.brandTitle")}</p>
+          <p className="text-[11px] text-[var(--foreground-muted)]">{t("dashboard.brandSubtitle")}</p>
         </div>
       </div>
     </div>
@@ -260,13 +270,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
         className="flex items-center justify-center gap-2 rounded-xl border border-[var(--border-default)] bg-[var(--surface-subtle)] px-3 py-2.5 text-xs font-medium text-[var(--accent)] transition hover:border-[var(--accent)]/40 hover:bg-[var(--accent-subtle)]"
       >
         <Send size={14} aria-hidden />
-        Telegram hỗ trợ
+        {t("common.telegramSupport")}
       </a>
-      <p className="text-center text-[10px] text-[var(--foreground-muted)]">© Nexora-API · tuananh</p>
+      <p className="text-center text-[10px] text-[var(--foreground-muted)]">{t("common.copyright")}</p>
     </div>
   );
 
-  const pageMeta = dashboardPageTitle(pathname);
+  const pagePathKey = dashboardPagePathKey(pathname);
+  const pageMeta = {
+    eyebrow: t(`page.${pagePathKey}.eyebrow`),
+    title: t(`page.${pagePathKey}.title`),
+  };
 
   return (
     <div className="flex min-h-screen min-h-[100dvh]">
@@ -278,21 +292,26 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       {mobileNavOpen ? (
-        <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="Navigation menu">
+        <div
+          className="fixed inset-0 z-40 lg:hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("common.menu")}
+        >
           <button
             type="button"
             className="absolute inset-0 bg-black/65 backdrop-blur-[2px] transition-opacity"
             onClick={closeMobileNav}
-            aria-label="Đóng menu"
+            aria-label={t("common.closeMenu")}
           />
           <div className="mobile-nav-panel absolute left-0 top-0 flex h-full w-[min(100vw-1.25rem,19rem)] flex-col border-r border-[var(--border-default)] bg-[var(--surface-panel)]/98 p-4 pt-[max(1rem,env(safe-area-inset-top))] shadow-2xl shadow-black/50 backdrop-blur-xl">
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm font-semibold text-[var(--foreground)]">Menu</span>
+              <span className="text-sm font-semibold text-[var(--foreground)]">{t("common.menu")}</span>
               <button
                 type="button"
                 onClick={closeMobileNav}
                 className="min-h-11 min-w-11 touch-manipulation rounded-xl border border-[var(--border-default)] p-2 text-[var(--foreground-secondary)] transition hover:bg-[var(--surface-hover)] active:scale-95"
-                aria-label="Đóng"
+                aria-label={t("common.close")}
               >
                 <X size={20} />
               </button>
@@ -317,7 +336,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             type="button"
             className="min-h-11 min-w-11 touch-manipulation rounded-xl border border-[var(--border-default)] p-2.5 text-[var(--foreground-secondary)] transition hover:bg-[var(--surface-hover)] active:scale-95 lg:hidden"
             onClick={() => setMobileNavOpen(true)}
-            aria-label="Mở menu"
+            aria-label={t("common.openMenu")}
           >
             <Menu size={20} />
           </button>
@@ -333,11 +352,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+            <LocaleSwitcher />
             <button
               type="button"
               onClick={logout}
               className="min-h-10 min-w-10 touch-manipulation rounded-xl border border-[var(--border-default)] p-2 text-[var(--foreground-secondary)] transition hover:border-red-500/35 hover:bg-red-950/35 hover:text-red-200 active:scale-95"
-              aria-label="Đăng xuất"
+              aria-label={t("common.logoutAria")}
+              title={t("common.logout")}
             >
               <LogOut size={18} />
             </button>
