@@ -67,17 +67,44 @@ See:
 
 ## Supabase setup
 
-1. Create Supabase project.
-2. Run SQL in `supabase/schema.sql`.
-3. Fill `.env.local` keys from Supabase project settings.
-4. Replace mock auth and mock data with Supabase queries.
+1. Create (or reuse) Supabase project.
+2. Run SQL in `supabase/schema.sql` and `supabase/migrations/002_license_key_hash_and_audit_logs.sql`.
+3. Fill `.env.local` from Supabase project settings:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+4. Add owner policy row in `account_policies` after schema import (replace your email):
+   ```sql
+   insert into account_policies (
+     email, role, assigned_plan, monthly_package_token_limit, monthly_key_limit,
+     package_tokens_used_this_month, keys_used_this_month, usage_month, updated_at
+   ) values (
+     'your-email@example.com', 'owner', 'premium', 99999, 999999, 0, 0, to_char(now(), 'YYYY-MM'), now()
+   )
+   on conflict (email) do update set
+     role = excluded.role,
+     assigned_plan = excluded.assigned_plan,
+     monthly_package_token_limit = excluded.monthly_package_token_limit,
+     monthly_key_limit = excluded.monthly_key_limit,
+     updated_at = now();
+   ```
+5. Restart app.
 
 ## Deploy to Vercel
 
 1. Push repo to GitHub.
 2. Import project in Vercel.
-3. Add environment variables from `.env.example`.
-4. Deploy.
+3. Add environment variables from `.env.example` in all environments (`Production`, `Preview`, `Development`).
+4. Redeploy after updating env vars.
+
+### Current MCP bootstrap (created automatically)
+
+- Project name: `nexora-api-prod`
+- Project ref: `cvjvreasqbnhcnwstwyq`
+- Region: `ap-southeast-1`
+- URL: `https://cvjvreasqbnhcnwstwyq.supabase.co`
+
+Note: `SUPABASE_SERVICE_ROLE_KEY` is intentionally not stored in this repository; copy it from Supabase Dashboard -> Project Settings -> API -> service_role.
 
 ## Integrate with your Theos workspace
 
